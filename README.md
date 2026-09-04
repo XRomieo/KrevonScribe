@@ -113,10 +113,36 @@ a timeline.
 
 ## How cues are routed
 
-Whisper detects one language for a whole file, so a per-segment language tag is
-not available. Each cue's text is inspected directly instead: the tool counts
-letters in Arabic Unicode blocks against total letters, ignoring digits,
-punctuation and whitespace, and compares the ratio to your threshold.
+Whisper picks **one** language for an entire file, from its opening window. On a
+bilingual timeline that is not a small inaccuracy: the losing language is
+*translated* into the winning one's script rather than transcribed, so every cue
+ends up on a single track and the tool does nothing useful. Measured on a real
+27-second EN/AR clip, global auto-detect returned Arabic at p=0.89 and rendered
+the English narration as Arabic text.
+
+So the kernel segments by language first. It runs detection over overlapping
+4-second windows, accumulates each window's probabilities into 1-second slots
+weighted toward the window centre, and forces the winning language per span when
+transcribing. Two details carry their weight:
+
+- **Centre weighting**, because a flat vote across the window dilates every
+  boundary by half a window and decodes the tail of an English sentence as
+  Arabic.
+- **Accumulating probabilities rather than median-filtering labels**, because a
+  median filter erases a real switch that happens to be one slot wide — which is
+  exactly what a short Arabic line between two English ones looks like.
+
+Spans are decoded with two seconds of neighbouring audio for context and
+segments whose midpoint falls outside the span are dropped. Whisper is markedly
+worse on a bare two-second island than on the same words in context.
+
+Only the candidate languages you configure are considered. Unrestricted
+detection wanders off to Spanish or Tagalog on accented or noisy windows.
+
+Routing to tracks then works on the text itself: the tool counts letters in
+Arabic Unicode blocks against total letters, ignoring digits, punctuation and
+whitespace, and compares the ratio to your threshold. Once each span is
+transcribed in its own language, script and language agree.
 
 The honest limit: a subtitle track carries one font, so an English sentence with
 an Arabic word inline renders entirely in one track's typeface. True per-word
