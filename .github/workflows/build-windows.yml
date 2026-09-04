@@ -1,0 +1,62 @@
+name: Build Windows portable
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.12 is the newest version with prebuilt wheels for every
+          # dependency, including pythonnet, which pywebview needs on Windows.
+          python-version: "3.12"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest tests -q
+
+      - name: Build frontend and bundle
+        run: python scripts/build.py
+
+      - name: Verify the bundle looks right
+        shell: pwsh
+        run: |
+          $exe = "dist/ResolveSubtitles/ResolveSubtitles.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          $index = "dist/ResolveSubtitles/_internal/frontend_dist/index.html"
+          if (-not (Test-Path $index)) { throw "frontend was not bundled ($index)" }
+          Write-Host "OK: $((Get-Item $exe).Length) bytes"
+
+      - name: Stage portable folder
+        shell: pwsh
+        run: |
+          Copy-Item README.md dist/ResolveSubtitles/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist/ResolveSubtitles/* `
+                           -DestinationPath ResolveSubtitles-windows-portable.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ResolveSubtitles-windows-portable
+          path: ResolveSubtitles-windows-portable.zip
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ResolveSubtitles-windows-portable.zip

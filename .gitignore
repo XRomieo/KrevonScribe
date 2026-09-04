@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Build output
+build/
+dist/
+resolve_subtitle_tool/frontend_dist/
+frontend/dist/
+frontend/node_modules/
+frontend/.vite/
+
+# Local state — credentials must never be committed
+.kaggle/
+kaggle.json
+access_token
+settings.json
+
+# OS
+.DS_Store

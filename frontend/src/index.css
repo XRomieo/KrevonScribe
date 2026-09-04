@@ -1,0 +1,186 @@
+@import "tailwindcss";
+
+@import "@fontsource-variable/archivo/index.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+   Broadcast-instrument palette. Graphite chassis, amber and teal channel
+   coding. English is always amber, Arabic always teal, everywhere in the UI.
+   --------------------------------------------------------------------------- */
+:root {
+  --chassis:      #0b0c0e;
+  --panel:        #131619;
+  --panel-raised: #191d22;
+  --panel-inset:  #0e1113;
+  --line:         #252a30;
+  --line-bright:  #363d45;
+
+  --ink:          #e8eaec;
+  --ink-dim:      #98a0a8;
+  --ink-faint:    #616970;
+
+  --en:           #f5a524;   /* English channel */
+  --en-dim:       #7a5313;
+  --ar:           #2fd4bd;   /* Arabic channel */
+  --ar-dim:       #16645a;
+
+  --live:         #46c47c;
+  --alert:        #f0544f;
+
+  --radius:       0.5rem;
+
+  /* shadcn token surface, mapped onto the palette above */
+  --background: var(--chassis);
+  --foreground: var(--ink);
+  --card: var(--panel);
+  --card-foreground: var(--ink);
+  --popover: var(--panel-raised);
+  --popover-foreground: var(--ink);
+  --primary: var(--en);
+  --primary-foreground: #1a1204;
+  --secondary: var(--panel-raised);
+  --secondary-foreground: var(--ink);
+  --muted: var(--panel-raised);
+  --muted-foreground: var(--ink-dim);
+  --accent: var(--panel-raised);
+  --accent-foreground: var(--ink);
+  --destructive: var(--alert);
+  --destructive-foreground: #1a0505;
+  --border: var(--line);
+  --input: var(--line-bright);
+  --ring: var(--en);
+}
+
+@theme inline {
+  --color-chassis: var(--chassis);
+  --color-panel: var(--panel);
+  --color-panel-raised: var(--panel-raised);
+  --color-panel-inset: var(--panel-inset);
+  --color-line: var(--line);
+  --color-line-bright: var(--line-bright);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-faint: var(--ink-faint);
+  --color-en: var(--en);
+  --color-en-dim: var(--en-dim);
+  --color-ar: var(--ar);
+  --color-ar-dim: var(--ar-dim);
+  --color-live: var(--live);
+  --color-alert: var(--alert);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}
+
+@layer base {
+  * { border-color: var(--line); }
+
+  html, body, #root { height: 100%; }
+
+  body {
+    background-color: var(--chassis);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-synthesis-weight: none;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;              /* the app owns its own scroll regions */
+  }
+
+  /* The chassis gets a faint machined texture rather than flat black. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image:
+      radial-gradient(1100px 600px at 78% -12%, rgba(245, 165, 36, 0.055), transparent 62%),
+      radial-gradient(900px 520px at -8% 108%, rgba(47, 212, 189, 0.045), transparent 60%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.016) 0 1px, transparent 1px 3px);
+  }
+
+  ::selection { background: rgba(245, 165, 36, 0.28); }
+
+  /* Slim instrument scrollbars */
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-bright);
+    border-radius: 999px;
+    border: 2px solid var(--chassis);
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #4a525b; }
+
+  /* pywebview shows a text caret on non-input elements without this */
+  button, label, [role="button"] { -webkit-user-select: none; user-select: none; }
+}
+
+@layer utilities {
+  /* Etched signage lettering used for section headers */
+  .label-etched {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* Recessed readout wells (timecode, log console) */
+  .inset-well {
+    background: var(--panel-inset);
+    box-shadow: inset 0 1px 0 rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.028);
+  }
+
+  .hairline-top { box-shadow: inset 0 1px 0 rgba(255,255,255,0.045); }
+
+  @keyframes pulse-live {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.45; transform: scale(0.86); }
+  }
+  .animate-live { animation: pulse-live 2s ease-in-out infinite; }
+
+  @keyframes sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(320%); }
+  }
+  .animate-sweep { animation: sweep 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(7px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .animate-rise { animation: rise 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-live, .animate-sweep, .animate-rise { animation: none; }
+  }
+}

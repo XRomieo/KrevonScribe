@@ -1,0 +1,12 @@
+# Runtime dependencies.
+#
+# faster-whisper is deliberately absent: transcription runs on Kaggle's GPU,
+# not on this machine. The Resolve scripting module is loaded from the local
+# DaVinci Resolve installation and is not installable from PyPI.
+
+pywebview>=6.0
+kaggle>=1.6
+
+# pywebview's Windows backend drives the WebView2 runtime through .NET.
+# WebView2 itself ships with Windows 10 and 11.
+pythonnet>=3.0 ; sys_platform == "win32"
