@@ -80,6 +80,7 @@ def run(
         audio,
         username=settings.kaggle_username,
         model=settings.whisper_model,
+        detect_model=settings.whisper_detect_model,
         language=settings.whisper_language,
         output_dir=Path(settings.srt_dir) / "_kaggle" / base,
         progress=say,

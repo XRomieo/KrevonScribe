@@ -21,21 +21,27 @@ WORKING = Path(os.environ.get("TRANSCRIBE_OUTPUT", "/kaggle/working"))
 AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff"}
 
 DEFAULTS = {
-    "model": "large-v3",
+    # large-v2 writes better text than v3 on this material; v3 is the better
+    # language *detector*. See docs/TRANSCRIPTION_FINDINGS.md for the numbers.
+    "model": "large-v2",
+    "detect_model": "large-v3",
     "language": "auto",      # "auto", or an ISO code such as "ar" / "en"
     "beam_size": 5,
     "vad_filter": True,
     "word_timestamps": False,
     "compute_type": "float16",
     "initial_prompt": "",
-    # Code-switching: detect language per window and force it per span, instead
-    # of letting whisper pick one language for the whole file.
+    # Code-switching: decide the language per region and force it there, rather
+    # than letting whisper pick one language for the whole file.
     "code_switch": True,
     "languages": ["en", "ar"],
-    "detect_window": 4.0,
-    "detect_hop": 1.0,
+    "conf_slot": 0.25,
+    "conf_smooth": 2.0,
     "min_span": 1.5,
-    "span_pad": 2.0,
+    "max_gap": 0.8,
+    "max_chars": 84,
+    "max_duration": 6.0,
+    "min_cue_duration": 0.25,
 }
 
 
@@ -116,13 +122,14 @@ def _compute_candidates(preferred: str, device: str, has_gpu: bool) -> list:
     return ordered
 
 
-def _load_model(WhisperModel, settings, device, has_gpu):
-    """Load the model, stepping down the compute-type ladder on rejection."""
+def _load_model(WhisperModel, settings, device, has_gpu, name=None):
+    """Load a model, stepping down the compute-type ladder on rejection."""
+    name = name or settings["model"]
     candidates = _compute_candidates(settings.get("compute_type"), device, has_gpu)
     last = None
     for compute_type in candidates:
         try:
-            return WhisperModel(settings["model"], device=device,
+            return WhisperModel(name, device=device,
                                 compute_type=compute_type), compute_type
         except ValueError as exc:
             log(f"compute_type={compute_type} rejected: {exc}")
@@ -130,77 +137,71 @@ def _load_model(WhisperModel, settings, device, has_gpu):
     raise RuntimeError(f"No usable compute type on {device}. Last error: {last}")
 
 
-def detect_language_spans(model, pcm, sr, settings):
-    """Map the audio to contiguous single-language spans.
+def _release(model):
+    """Free a model's GPU memory before loading the next one."""
+    try:
+        del model
+        import gc
+        gc.collect()
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
 
-    Whisper decides one language for the whole file from its first window, so a
-    clip that switches between English and Arabic comes back entirely in one of
-    them — the other language gets *translated* into that script rather than
-    transcribed. Detecting per window and forcing the language per span is what
-    keeps the two apart.
 
-    Detection windows overlap and each one votes, weighted by its probability,
-    into every slot it covers. Accumulating probabilities rather than smoothing
-    hard labels matters: a median filter over labels erases a genuine switch
-    that happens to be one slot wide, which is exactly how a short Arabic line
-    between two English ones gets lost.
+def language_spans_from_words(words_by_lang, total, settings):
+    """Decide which language owns each moment, from per-word confidences.
 
-    Only the configured candidate languages are considered; unrestricted
-    detection wanders off to Spanish or Tagalog on accented or noisy windows.
+    Each candidate language has already transcribed the whole file, so for any
+    instant we can ask which language's decoder was more sure of itself. That
+    beats a standalone language detector on two counts: the confidences come
+    from the same acoustic model that will produce the subtitles, and *silence*
+    is evidence — where a decoder emitted no words at all, it is telling us the
+    audio is not its language.
+
+    Pure arithmetic over word lists, so it can be tested without a GPU.
     """
-    langs = [str(l) for l in settings["languages"]]
-    win = float(settings["detect_window"])
-    hop = float(settings["detect_hop"])
-    total = len(pcm) / sr
+    langs = list(words_by_lang)
+    slot = float(settings["conf_slot"])
+    smooth = float(settings["conf_smooth"])
     if total <= 0 or not langs:
         return [(0.0, max(total, 0.0), (langs or ["en"])[0])]
 
-    n_slots = max(1, int(total / hop + 0.999))
-    acc = [{l: 0.0 for l in langs} for _ in range(n_slots)]
-    votes = [0] * n_slots
+    n = max(1, int(total / slot + 0.999))
+    conf = {}
+    for lang, words in words_by_lang.items():
+        acc = [0.0] * n
+        cnt = [0] * n
+        for w in words:
+            i0 = max(0, int(w["start"] / slot))
+            i1 = min(n, max(i0 + 1, int(w["end"] / slot + 0.999)))
+            for i in range(i0, i1):
+                acc[i] += float(w["probability"])
+                cnt[i] += 1
+        # No word here means this decoder heard nothing it recognised: score 0,
+        # not "unknown". That is what separates the two languages in practice.
+        conf[lang] = [acc[i] / cnt[i] if cnt[i] else 0.0 for i in range(n)]
 
-    t = 0.0
-    while t < total:
-        a, b = int(t * sr), min(len(pcm), int((t + win) * sr))
-        if (b - a) / sr < 1.0:
-            break
-        try:
-            _, _, all_probs = model.detect_language(audio=pcm[a:b])
-        except Exception as exc:
-            log(f"language detection failed at {t:.1f}s ({exc}); skipping window")
-            t += hop
-            continue
-        if not isinstance(all_probs, dict):
-            all_probs = {k: float(v) for k, v in (all_probs or [])}
-        probs = {l: float(all_probs.get(l, 0.0)) for l in langs}
-        # Weight the vote toward the window centre. A flat vote across the whole
-        # window dilates every boundary by half a window, which would transcribe
-        # the tail of an English sentence with Arabic forced (and vice versa).
-        centre = (t + b / sr) / 2.0
-        half = max((b / sr - t) / 2.0, 1e-6)
-        first = int(t / hop)
-        last = min(n_slots, int((b / sr) / hop + 0.999))
-        for i in range(first, last):
-            slot_centre = (i + 0.5) * hop
-            weight = 1.0 - abs(slot_centre - centre) / half
-            if weight <= 0.0:
-                continue
-            for l in langs:
-                acc[i][l] += probs[l] * weight
-            votes[i] += 1
-        t += hop
+    half = max(1, int((smooth / slot) / 2))
+    smoothed = {}
+    for lang, series in conf.items():
+        out = []
+        for i in range(n):
+            lo, hi = max(0, i - half), min(n, i + half + 1)
+            window = series[lo:hi]
+            out.append(sum(window) / len(window))
+        smoothed[lang] = out
 
     labels = []
-    for i in range(n_slots):
-        if votes[i]:
-            labels.append(max(acc[i].items(), key=lambda kv: kv[1])[0])
-        else:
-            labels.append(labels[-1] if labels else langs[0])
+    for i in range(n):
+        best = max(langs, key=lambda l: smoothed[l][i])
+        if smoothed[best][i] <= 0.0:
+            best = labels[-1] if labels else langs[0]
+        labels.append(best)
 
     spans = []
     for i, lang in enumerate(labels):
-        a = i * hop
-        b = min(total, (i + 1) * hop)
+        a, b = i * slot, min(total, (i + 1) * slot)
         if spans and spans[-1][2] == lang:
             spans[-1][1] = b
         else:
@@ -208,7 +209,6 @@ def detect_language_spans(model, pcm, sr, settings):
     spans[0][0] = 0.0
     spans[-1][1] = total
 
-    # Absorb spans too short to transcribe usefully into their neighbour.
     min_span = float(settings["min_span"])
     merged = []
     for span in spans:
@@ -220,64 +220,151 @@ def detect_language_spans(model, pcm, sr, settings):
         merged[1][0] = merged[0][0]
         merged.pop(0)
 
-    # A neighbour absorb can leave two same-language spans adjacent.
     final = []
     for span in merged:
         if final and final[-1][2] == span[2]:
             final[-1][1] = span[1]
         else:
             final.append(span)
-
-    for a, b, lang in final:
-        log(f"  span {a:6.2f}-{b:6.2f}s -> {lang}")
     return [(a, b, lang) for a, b, lang in final]
 
 
-def transcribe_spans(model, pcm, sr, spans, settings):
-    """Transcribe each span with its own language forced, then re-offset times.
+def cues_from_words(words_by_lang, spans, settings):
+    """Rebuild cues from the words each language owns.
 
-    Each span is decoded with a little neighbouring audio included. Whisper is
-    much weaker on a bare two-second island than on the same words with context
-    around them, so the padding buys real accuracy; segments whose midpoint
-    falls outside the span belong to the neighbour and are dropped.
+    Whisper's own segment boundaries are placed for readability and pay no
+    attention to where the speaker switched language, so a segment routinely
+    straddles a switch. Keeping or dropping such a segment whole is wrong both
+    ways: dropping it loses a real sentence, keeping it drags in text the model
+    hallucinated over the other language's audio. Selecting at word level cuts
+    exactly at the switch.
+
+    Cues break on a span boundary, on a pause longer than ``max_gap``, at
+    sentence-ending punctuation, and before a cue grows past ``max_chars`` or
+    ``max_duration``. Times come from the words themselves, never from the span
+    grid.
+    """
+    max_gap = float(settings["max_gap"])
+    max_chars = int(settings["max_chars"])
+    max_duration = float(settings["max_duration"])
+    sentence_end = tuple(".!?\u061f\u06d4\u2026")
+
+    def owner(t):
+        for a, b, lang in spans:
+            if a <= t < b:
+                return lang
+        return spans[-1][2] if spans else None
+
+    cues = []
+    for lang, words in words_by_lang.items():
+        current = []
+        for word in words:
+            start_t, end_t = float(word["start"]), float(word["end"])
+            if end_t <= start_t:
+                continue
+            if owner((start_t + end_t) / 2.0) != lang:
+                if current:
+                    cues.append(_finish_cue(current, lang))
+                    current = []
+                continue
+            if current:
+                previous = current[-1]
+                text_so_far = "".join(w["word"] for w in current).strip()
+                if (
+                    start_t - float(previous["end"]) > max_gap
+                    or len(text_so_far) >= max_chars
+                    or end_t - float(current[0]["start"]) > max_duration
+                    or text_so_far.endswith(sentence_end)
+                ):
+                    cues.append(_finish_cue(current, lang))
+                    current = []
+            current.append(word)
+        if current:
+            cues.append(_finish_cue(current, lang))
+
+    # A tenth-of-a-second cue is unreadable, and it is usually whisper's
+    # end-of-audio artefact ("You", "Thank you") rather than speech.
+    floor = float(settings["min_cue_duration"])
+    cues = [c for c in cues if c["text"] and (c["end"] - c["start"]) >= floor]
+    cues.sort(key=lambda c: (c["start"], c["language"]))
+    return cues
+
+
+def _finish_cue(words, lang):
+    text = "".join(w["word"] for w in words).strip()
+    return {
+        "start": round(float(words[0]["start"]), 3),
+        "end": round(float(words[-1]["end"]), 3),
+        "text": text,
+        "language": lang,
+    }
+
+
+def _pass_words(model, audio, lang, settings, offset=0.0):
+    """One forced-language decode, returned as absolute-timed words."""
+    segments, _ = model.transcribe(
+        audio,
+        language=lang,
+        beam_size=int(settings["beam_size"]),
+        vad_filter=bool(settings["vad_filter"]),
+        word_timestamps=True,          # required: drives both the language
+        initial_prompt=settings["initial_prompt"] or None,   # decision and cues
+        condition_on_previous_text=False,
+    )
+    words = []
+    for seg in segments:
+        for w in (seg.words or []):
+            words.append({"start": offset + w.start, "end": offset + w.end,
+                          "probability": w.probability, "word": w.word})
+    return words
+
+
+def transcribe_code_switched(WhisperModel, settings, device, has_gpu, pcm, sr):
+    """Find the language spans with one model, then transcribe them with another.
+
+    Two models because the jobs want opposite things. Detection needs a model
+    that is *unconvincing* on the wrong language — that lack of confidence is
+    the whole signal — and large-v3 is, while large-v2 fluently translates in
+    either direction and so cannot tell them apart. Transcription just wants the
+    best text, which is large-v2. Smaller models are not an option for the
+    detection half: medium collapses to a single span and small misplaces the
+    boundaries badly.
+
+    When both names match, the detection passes are reused and nothing is
+    decoded twice.
     """
     total = len(pcm) / sr
-    pad = float(settings["span_pad"])
-    out = []
+    langs = [str(l) for l in settings["languages"]]
+    detect_name = str(settings["detect_model"] or settings["model"])
+    transcribe_name = str(settings["model"])
+
+    model, compute_type = _load_model(WhisperModel, settings, device, has_gpu, detect_name)
+    log(f"detection model {detect_name} loaded (compute_type={compute_type})")
+    words_by_lang = {}
+    for lang in langs:
+        words_by_lang[lang] = _pass_words(model, pcm, lang, settings)
+        log(f"  {detect_name}/{lang}: {len(words_by_lang[lang])} words")
+
+    spans = language_spans_from_words(words_by_lang, total, settings)
     for a, b, lang in spans:
-        pa, pb = max(0.0, a - pad), min(total, b + pad)
-        clip = pcm[int(pa * sr):int(pb * sr)]
-        if len(clip) < sr // 2:
-            continue
-        segments, _ = model.transcribe(
-            clip,
-            language=lang,
-            beam_size=int(settings["beam_size"]),
-            vad_filter=bool(settings["vad_filter"]),
-            word_timestamps=bool(settings["word_timestamps"]),
-            initial_prompt=settings["initial_prompt"] or None,
-            condition_on_previous_text=False,
+        log(f"  span {a:6.2f}-{b:6.2f}s -> {lang}")
+
+    if transcribe_name != detect_name:
+        _release(model)
+        model, compute_type = _load_model(
+            WhisperModel, settings, device, has_gpu, transcribe_name
         )
-        kept = dropped = 0
-        for seg in segments:
-            text = (seg.text or "").strip()
-            if not text:
-                continue
-            start, end = pa + seg.start, pa + seg.end
-            midpoint = (start + end) / 2.0
-            if not (a <= midpoint < b):
-                dropped += 1
-                continue
-            out.append({
-                "start": round(max(a, start), 3),
-                "end": round(min(b, end), 3),
-                "text": text,
-                "language": lang,
-            })
-            kept += 1
-        log(f"  {lang} span {a:.2f}-{b:.2f}s -> {kept} segments ({dropped} from padding)")
-    out.sort(key=lambda s: s["start"])
-    return out
+        log(f"transcription model {transcribe_name} loaded (compute_type={compute_type})")
+        # Full file per language, not span by span. Decoding just a span is
+        # cheaper but measurably worse: on an eight-second slice large-v2
+        # returned seven words where the same audio inside the whole file gave a
+        # complete sentence. Whisper needs the surrounding context.
+        words_by_lang = {}
+        for lang in langs:
+            words_by_lang[lang] = _pass_words(model, pcm, lang, settings)
+            log(f"  {transcribe_name}/{lang}: {len(words_by_lang[lang])} words")
+
+    return cues_from_words(words_by_lang, spans, settings), spans
 
 
 def main():
@@ -300,9 +387,6 @@ def main():
     log(f"device={device} gpu={_gpu_name()}")
 
     started = time.time()
-    model, compute_type = _load_model(WhisperModel, settings, device, has_gpu)
-    log(f"model loaded in {time.time() - started:.1f}s (compute_type={compute_type})")
-
     language = None if settings["language"] in ("auto", "", None) else settings["language"]
     code_switch = bool(settings["code_switch"]) and language is None
 
@@ -313,8 +397,9 @@ def main():
         pcm = decode_audio(str(audio), sampling_rate=sr)
         duration = len(pcm) / sr
         log(f"code-switch pass over {duration:.2f}s using {settings['languages']}")
-        spans = detect_language_spans(model, pcm, sr, settings)
-        out = transcribe_spans(model, pcm, sr, spans, settings)
+        out, spans = transcribe_code_switched(
+            WhisperModel, settings, device, has_gpu, pcm, sr
+        )
         span_summary = [
             {"start": round(a, 2), "end": round(b, 2), "language": lang} for a, b, lang in spans
         ]
@@ -324,6 +409,8 @@ def main():
         detected = max(counts, key=counts.get) if counts else (settings["languages"] or ["en"])[0]
         detected_p = None
     else:
+        model, compute_type = _load_model(WhisperModel, settings, device, has_gpu)
+        log(f"model loaded in {time.time() - started:.1f}s (compute_type={compute_type})")
         segments, info = model.transcribe(
             str(audio),
             language=language,

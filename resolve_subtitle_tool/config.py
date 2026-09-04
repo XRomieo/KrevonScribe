@@ -49,7 +49,8 @@ class Settings:
     font_ar: str = "Geeza Pro" if sys.platform == "darwin" else "Dubai"
 
     kaggle_username: str = ""
-    whisper_model: str = "large-v3"
+    whisper_model: str = "large-v2"
+    whisper_detect_model: str = "large-v3"
     # Language hint passed to whisper. "auto" lets it detect; for code-switched
     # Arabic/English audio an explicit hint usually helps.
     whisper_language: str = "auto"

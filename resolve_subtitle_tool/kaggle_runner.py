@@ -105,7 +105,8 @@ def transcribe(
     audio_path: str | Path,
     username: str,
     *,
-    model: str = "large-v3",
+    model: str = "large-v2",
+    detect_model: str = "large-v3",
     language: str = "auto",
     code_switch: bool = True,
     languages: Sequence[str] = ("en", "ar"),
@@ -146,6 +147,7 @@ def transcribe(
             json.dumps(
                 {
                     "model": model,
+                    "detect_model": detect_model,
                     "language": language,
                     "code_switch": bool(code_switch),
                     "languages": list(languages),
