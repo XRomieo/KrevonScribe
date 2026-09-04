@@ -15,8 +15,9 @@ import sys
 import time
 from pathlib import Path
 
-INPUT_ROOT = Path("/kaggle/input")
-WORKING = Path("/kaggle/working")
+# Overridable so the kernel logic can be exercised off Kaggle.
+INPUT_ROOT = Path(os.environ.get("TRANSCRIBE_INPUT", "/kaggle/input"))
+WORKING = Path(os.environ.get("TRANSCRIBE_OUTPUT", "/kaggle/working"))
 AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff"}
 
 DEFAULTS = {
