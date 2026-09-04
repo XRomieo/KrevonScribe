@@ -62,6 +62,11 @@ class Settings:
     # Which language gets auto-placed on the timeline. Only one can be, because
     # every append lands on the subtitle track that already holds cues.
     primary_language: str = "en"
+    single_track: bool = True
+    # "speechmatics" (Melia 1: one pass, native code-switching, per-word language
+    # tags, 10 free hours a month) or "kaggle" (free whisper on a Kaggle GPU).
+    backend: str = "kaggle"
+    speechmatics_api_key: str = ""
 
     def __post_init__(self) -> None:
         if not self.audio_dir:

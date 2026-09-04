@@ -151,6 +151,63 @@ def split_by_language(
     return english, arabic
 
 
+def split_tagged_segments(
+    segments: Iterable[dict], threshold: float = 0.5
+) -> tuple[list[Cue], list[Cue]]:
+    """Split segments into (english, arabic), trusting a language tag if present.
+
+    A backend that reports the spoken language per word — Speechmatics Melia
+    does — knows better than we can infer from the script. Falling back to
+    script classification matters for the whisper path, and also for a tagged
+    cue whose text is genuinely the other script (a transliterated name).
+    """
+    english: list[Cue] = []
+    arabic: list[Cue] = []
+    for segment in segments:
+        text = _clean(str(segment.get("text", "")))
+        if not text:
+            continue
+        cue = Cue(float(segment["start"]), float(segment["end"]), text)
+        tag = str(segment.get("language", "") or "").strip().lower().split("-")[0]
+        if tag == LANG_AR:
+            arabic.append(cue)
+        elif tag == LANG_EN:
+            english.append(cue)
+        elif classify(text, threshold) == LANG_AR:
+            arabic.append(cue)
+        else:
+            english.append(cue)
+    return english, arabic
+
+
+def merge_for_single_track(
+    *groups: Sequence[Cue], min_duration: float = 0.2
+) -> list[Cue]:
+    """Interleave several languages into one non-overlapping, ordered track.
+
+    Resolve shows one subtitle track at a time, so both languages have to share
+    a track to be watchable — and a single track cannot hold overlapping cues.
+    Whisper's two language passes do overlap at a switch (one decoder's last
+    word runs past the other's first), so where they collide the earlier cue is
+    trimmed to end where the next begins, and dropped entirely if that leaves it
+    too short to read.
+    """
+    merged = sorted(
+        (cue for group in groups for cue in group), key=lambda c: (c.start, c.end)
+    )
+    out: list[Cue] = []
+    for cue in merged:
+        if out and cue.start < out[-1].end:
+            trimmed_end = min(out[-1].end, cue.start)
+            if trimmed_end - out[-1].start >= min_duration:
+                out[-1] = Cue(out[-1].start, trimmed_end, out[-1].text)
+            else:
+                out.pop()
+        if cue.end - cue.start >= min_duration:
+            out.append(cue)
+    return out
+
+
 def render_srt(cues: Sequence[Cue], offset: float = 0.0) -> str:
     """Render cues as SRT text.
 

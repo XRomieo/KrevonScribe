@@ -32,27 +32,34 @@ your two font names and reminds you which to apply.
 
 ## What is automatic, and what is not
 
-Automatic:
+Both languages go into **one** subtitle track, in time order. That is not a
+compromise, it is the only arrangement that works: Resolve displays a single
+subtitle track at a time, and it routes every programmatic append to the
+already-populated track, so a second track could never be filled automatically
+anyway. One track also means one font — pick one that covers Arabic and Latin
+(Geeza Pro, Noto Sans Arabic) and set it in the Inspector, because Resolve
+exposes no font API.
 
-1. Mute the audio tracks you did not arm, render the rest to one 48 kHz /
-   16-bit stereo WAV, restore the mute states afterwards.
-2. Upload the WAV to a private Kaggle dataset, push a GPU kernel, poll it, and
-   download `segments.json`.
-3. Route every cue to English or Arabic by inspecting its script, and write
-   `<name>.en.srt` and `<name>.ar.srt`.
-4. Import both SRTs and place **one** language onto a new subtitle track,
-   frame-accurately.
+Set `single_track = false` to get the old behaviour instead: the primary
+language placed automatically and the second staged in the Media Pool for you to
+drag onto its own track.
 
-Manual, twice:
+## Choosing a transcription backend
 
-- **Drag the second SRT** from the Media Pool onto the empty subtitle track the
-  tool creates for it. Resolve routes every scripted import to whichever
-  subtitle track already holds cues — `trackIndex` is ignored, inserting or
-  locking tracks does not redirect it, and appending onto an occupied track
-  corrupts the timing. So only one language can be placed programmatically.
-- **Set the font** on each subtitle track in the Inspector, for the reason above.
+| | `speechmatics` | `kaggle` |
+|---|---|---|
+| Model | Melia 1 | Whisper large-v2 + large-v3 |
+| Arabic/English code-switching | native, one pass | inferred, four passes |
+| Mixed error rate (published benchmark) | **15.1%** | — (Whisper is not in that table) |
+| Language per word | reported by the model | inferred from confidences |
+| Cost | 10 hours a month free | free |
+| Setup | one API key | Kaggle account, phone-verified |
+| Sends audio to | Speechmatics | Kaggle |
 
----
+`speechmatics` is the accurate one and needs far less machinery, because Melia
+tags every word with the language it was spoken in — the split becomes a lookup
+rather than an inference. `kaggle` stays the default so the tool works with no
+third-party account beyond Kaggle.
 
 ## Requirements
 

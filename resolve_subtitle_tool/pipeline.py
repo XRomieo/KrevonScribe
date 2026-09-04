@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import kaggle_runner, resolve_bridge, subtitle_utils
+from . import kaggle_runner, resolve_bridge, speechmatics_runner, subtitle_utils
 from .config import Settings
 
 Progress = Callable[[str], None]
@@ -17,10 +17,12 @@ Progress = Callable[[str], None]
 @dataclass
 class RunOutcome:
     audio_path: str
+    combined_srt: str
     en_srt: str
     ar_srt: str
     en_cues: int
     ar_cues: int
+    combined_cues: int
     placed_language: str | None
     placed_cues: int
     manual_srt: str | None
@@ -75,34 +77,51 @@ def run(
         say(f"Using {audio.name}.")
 
     # ---- 2. transcribe ----------------------------------------------------
-    say("Sending to Kaggle…")
-    result = kaggle_runner.transcribe(
-        audio,
-        username=settings.kaggle_username,
-        model=settings.whisper_model,
-        detect_model=settings.whisper_detect_model,
-        language=settings.whisper_language,
-        output_dir=Path(settings.srt_dir) / "_kaggle" / base,
-        progress=say,
-    )
-    detected = str(result.meta.get("detected_language", "") or "unknown")
-    say(f"Whisper reported language '{detected}' over {len(result.segments)} segments.")
+    if settings.backend == "speechmatics":
+        result = speechmatics_runner.transcribe(
+            audio,
+            settings.speechmatics_api_key,
+            languages=("en", "ar"),
+            progress=say,
+        )
+        counts = result.meta.get("language_counts") or {}
+        detected = "+".join(sorted(counts)) or "unknown"
+        say(f"Melia tagged {len(result.segments)} cues: {counts}.")
+    else:
+        say("Sending to Kaggle…")
+        result = kaggle_runner.transcribe(
+            audio,
+            username=settings.kaggle_username,
+            model=settings.whisper_model,
+            detect_model=settings.whisper_detect_model,
+            language=settings.whisper_language,
+            output_dir=Path(settings.srt_dir) / "_kaggle" / base,
+            progress=say,
+        )
+        detected = str(result.meta.get("detected_language", "") or "unknown")
+        say(f"Whisper reported language '{detected}' over {len(result.segments)} segments.")
 
     # ---- 3. split + write -------------------------------------------------
-    cues = subtitle_utils.cues_from_segments(result.segments)
-    if not cues:
-        raise RuntimeError("Kaggle returned no usable subtitle cues.")
-    english, arabic = subtitle_utils.split_by_language(cues, settings.arabic_threshold)
+    if not result.segments:
+        raise RuntimeError("The transcription backend returned no usable cues.")
+    english, arabic = subtitle_utils.split_tagged_segments(
+        result.segments, settings.arabic_threshold
+    )
+    if not english and not arabic:
+        raise RuntimeError("The transcription backend returned no usable cues.")
     say(f"Routed {len(english)} cues to English and {len(arabic)} to Arabic.")
 
     srt_dir = Path(settings.srt_dir)
     en_srt = subtitle_utils.write_srt(english, srt_dir / f"{base}.en.srt")
     ar_srt = subtitle_utils.write_srt(arabic, srt_dir / f"{base}.ar.srt")
-    say(f"Wrote {en_srt.name} and {ar_srt.name}.")
+    combined = subtitle_utils.merge_for_single_track(english, arabic)
+    combined_srt = subtitle_utils.write_srt(combined, srt_dir / f"{base}.srt")
+    say(f"Wrote {combined_srt.name} ({len(combined)} cues), plus the split files.")
 
     outcome = RunOutcome(
-        audio_path=str(audio), en_srt=str(en_srt), ar_srt=str(ar_srt),
-        en_cues=len(english), ar_cues=len(arabic),
+        audio_path=str(audio), combined_srt=str(combined_srt),
+        en_srt=str(en_srt), ar_srt=str(ar_srt),
+        en_cues=len(english), ar_cues=len(arabic), combined_cues=len(combined),
         placed_language=None, placed_cues=0,
         manual_srt=None, manual_track_index=None,
         detected_language=detected, warnings=warnings,
@@ -115,6 +134,27 @@ def run(
         warnings.append(
             "Manual-file mode does not import into Resolve, because the cue times "
             "are relative to that file rather than to a timeline."
+        )
+        return outcome
+
+    if settings.single_track:
+        # Resolve only ever displays one subtitle track, so both languages share
+        # it. This is also the only arrangement it can populate automatically:
+        # every append lands on the already-filled track, so a second track
+        # would always need dragging by hand.
+        if combined:
+            try:
+                placed = resolve_bridge.place_srt_on_timeline(
+                    combined_srt, "Subtitles", progress=say
+                )
+                outcome.placed_language, outcome.placed_cues = "mixed", placed
+            except resolve_bridge.ResolveError as exc:
+                warnings.append(f"Could not place the subtitles: {exc}")
+                say(f"! {exc}")
+        warnings.append(
+            f"One track carries both languages, so it carries one font: choose one "
+            f"that covers Arabic and Latin (for example {settings.font_ar}). "
+            f"Resolve exposes no font API, so set it in the Inspector."
         )
         return outcome
 
