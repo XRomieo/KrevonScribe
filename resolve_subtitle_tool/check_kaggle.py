@@ -110,7 +110,7 @@ def check_gpu_and_internet(api, timeout: float = 900.0) -> bool:
             json.dumps(
                 {
                     "id": ref,
-                    "title": "Resolve subtitle preflight",
+                    "title": slug,
                     "code_file": "preflight.py",
                     "language": "python",
                     "kernel_type": "script",

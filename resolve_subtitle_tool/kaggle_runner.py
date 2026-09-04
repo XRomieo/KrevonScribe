@@ -17,7 +17,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 Progress = Callable[[str], None]
 
@@ -107,6 +107,8 @@ def transcribe(
     *,
     model: str = "large-v3",
     language: str = "auto",
+    code_switch: bool = True,
+    languages: Sequence[str] = ("en", "ar"),
     slug: str | None = None,
     output_dir: str | Path | None = None,
     progress: Progress | None = None,
@@ -122,9 +124,14 @@ def transcribe(
     if not username:
         raise KaggleRunError("Your Kaggle username is required to name the dataset.")
 
+    # Kaggle derives the real slug from the *title*, ignoring the id we send, so
+    # title and id must agree exactly or later lookups 404. Reserve room for the
+    # "-run" suffix up front rather than truncating the title afterwards.
     base = slug or slugify(f"resolve-subs-{audio_path.stem}")
+    base = base[:46].strip("-")
+    kernel_title = f"{base}-run"
     dataset_ref = f"{username}/{base}"
-    kernel_ref = f"{username}/{base}-run"
+    kernel_ref = f"{username}/{kernel_title}"
     started = time.time()
 
     api = _api()
@@ -136,10 +143,19 @@ def transcribe(
         say(f"Staging {audio_path.name} ({audio_path.stat().st_size / 1e6:.1f} MB)…")
         shutil.copy2(audio_path, ds_dir / audio_path.name)
         (ds_dir / "job.json").write_text(
-            json.dumps({"model": model, "language": language}, indent=1), encoding="utf-8"
+            json.dumps(
+                {
+                    "model": model,
+                    "language": language,
+                    "code_switch": bool(code_switch),
+                    "languages": list(languages),
+                },
+                indent=1,
+            ),
+            encoding="utf-8",
         )
         (ds_dir / "dataset-metadata.json").write_text(
-            json.dumps({"title": base[:50], "id": dataset_ref,
+            json.dumps({"title": base, "id": dataset_ref,
                         "licenses": [{"name": "CC0-1.0"}]}, indent=1),
             encoding="utf-8",
         )
@@ -174,7 +190,7 @@ def transcribe(
         (k_dir / "kernel-metadata.json").write_text(
             json.dumps({
                 "id": kernel_ref,
-                "title": f"{base}-run"[:50],
+                "title": kernel_title,
                 "code_file": "transcribe_kernel.py",
                 "language": "python",
                 "kernel_type": "script",
