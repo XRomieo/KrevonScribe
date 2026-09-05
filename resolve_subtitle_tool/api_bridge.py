@@ -9,6 +9,7 @@ log lines back into the page.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -29,6 +30,10 @@ def _err(exc: BaseException | str) -> dict:
         return {"ok": False, "error": exc}
     return {"ok": False, "error": str(exc) or exc.__class__.__name__,
             "kind": exc.__class__.__name__}
+
+
+# Keeps a console window from flashing up when this windowed build shells out.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class Api:
@@ -152,7 +157,9 @@ class Api:
             if sys.platform == "darwin":
                 subprocess.run(["open", url], check=False)
             elif sys.platform == "win32":
-                subprocess.run(["cmd", "/c", "start", "", url], check=False)
+                # Not `cmd /c start`: this build has no console, so cmd flashes
+                # one up, and start treats & in a URL as a command separator.
+                os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606
             else:
                 subprocess.run(["xdg-open", url], check=False)
             return _ok()
@@ -168,7 +175,10 @@ class Api:
             if sys.platform == "darwin":
                 subprocess.run(["open", "-R", str(p)], check=False)
             elif sys.platform == "win32":
-                subprocess.run(["explorer", "/select,", str(p)], check=False)
+                # The flag and the path are one argument. Split in two, Explorer
+                # sees an empty selection and opens Documents instead.
+                subprocess.run(["explorer", f"/select,{p}"], check=False,
+                               creationflags=_NO_WINDOW)
             else:
                 subprocess.run(["xdg-open", str(p.parent)], check=False)
             return _ok()

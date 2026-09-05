@@ -20,14 +20,30 @@ def api(tmp_path, monkeypatch):
     return api_bridge.Api()
 
 
-class TestOpenExternal:
-    def test_opens_an_https_link(self, api, monkeypatch):
-        calls = []
-        monkeypatch.setattr(api_bridge.subprocess, "run", lambda *a, **k: calls.append(a))
-        assert api.open_external("https://www.kaggle.com/settings")["ok"]
-        assert calls, "nothing was launched"
-        assert "https://www.kaggle.com/settings" in calls[0][0]
+@pytest.fixture
+def launches(monkeypatch):
+    """Capture every way the bridge can hand something to the OS.
 
+    Windows opens links with os.startfile and everything else shells out, so a
+    test that watched only subprocess would pass on macOS while letting a real
+    browser open on a Windows CI runner.
+    """
+    calls = []
+    monkeypatch.setattr(api_bridge.subprocess, "run", lambda *a, **k: calls.append(a[0]))
+    monkeypatch.setattr(api_bridge.os, "startfile", lambda p: calls.append([p]), raising=False)
+    return calls
+
+
+class TestOpenExternal:
+    @pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+    def test_opens_an_https_link(self, api, monkeypatch, launches, platform):
+        monkeypatch.setattr(api_bridge.sys, "platform", platform)
+        assert api.open_external("https://www.kaggle.com/settings")["ok"]
+        assert launches, "nothing was launched"
+        assert any("https://www.kaggle.com/settings" in str(part)
+                   for part in launches[0])
+
+    @pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
     @pytest.mark.parametrize("url", [
         "file:///etc/passwd",
         "http://example.com",
@@ -35,12 +51,30 @@ class TestOpenExternal:
         "/bin/sh",
         "",
     ])
-    def test_refuses_anything_that_is_not_https(self, api, monkeypatch, url):
-        calls = []
-        monkeypatch.setattr(api_bridge.subprocess, "run", lambda *a, **k: calls.append(a))
+    def test_refuses_anything_that_is_not_https(self, api, monkeypatch, launches,
+                                                url, platform):
+        monkeypatch.setattr(api_bridge.sys, "platform", platform)
         result = api.open_external(url)
         assert result["ok"] is False
-        assert not calls, f"{url!r} reached the shell"
+        assert not launches, f"{url!r} reached the shell"
+
+
+class TestReveal:
+    def test_windows_gets_the_flag_and_path_as_one_argument(
+        self, api, monkeypatch, launches, tmp_path,
+    ):
+        # explorer parses "/select,<path>" as a unit. Passed as two arguments it
+        # selects nothing and opens Documents instead of the file.
+        target = tmp_path / "EP04.srt"
+        target.write_text("1\n")
+        monkeypatch.setattr(api_bridge.sys, "platform", "win32")
+        assert api.reveal(str(target))["ok"]
+        assert launches == [["explorer", f"/select,{target}"]]
+
+    def test_missing_paths_are_reported_rather_than_launched(self, api, launches, tmp_path):
+        result = api.reveal(str(tmp_path / "nope.srt"))
+        assert result["ok"] is False
+        assert not launches
 
 
 class TestSaveSettings:

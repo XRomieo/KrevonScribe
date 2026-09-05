@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -73,7 +74,11 @@ def selftest() -> int:
 
     # Imports PyInstaller has to have been told about; a missing hidden import
     # shows up here rather than the first time someone presses Transcribe.
-    for module in ("webview", "kaggle.api.kaggle_api_extended", "requests"):
+    # bottle and webview.http back the local server the frontend is served from.
+    # They are pure Python, so they live in the archive inside the exe where no
+    # file listing can confirm them -- importing is the only proof.
+    for module in ("webview", "webview.http", "bottle",
+                   "kaggle.api.kaggle_api_extended", "requests"):
         check(f"import {module}", lambda m=module: importlib.import_module(m).__name__)
 
     # Importing `webview` alone proves nothing about the window opening: the GUI
@@ -101,6 +106,27 @@ def selftest() -> int:
 
     check("srt round trip", srt_roundtrip)
 
+    def serves_frontend():
+        # The window is drawn from a local HTTP server now, not file://. That
+        # server is the single point everything else depends on, so start the
+        # real one against the real frontend and fetch the page back.
+        import urllib.request
+
+        from webview import http as wv_http
+
+        index = frontend_index()
+        address, _, server = wv_http.start_server(urls=[str(index)], http_port=None)
+        try:
+            with urllib.request.urlopen(f"{address}/index.html", timeout=10) as r:
+                body = r.read()
+            assert r.status == 200, r.status
+            assert b"<div id=\"root\">" in body, body[:200]
+            return f"{len(body)} bytes from {address}"
+        finally:
+            getattr(server, "shutdown", lambda: None)()
+
+    check("serves frontend", serves_frontend)
+
     def config_roundtrip():
         # Serialise and rebuild without touching the user's saved settings.
         from . import config
@@ -125,6 +151,50 @@ def selftest() -> int:
     return 1 if failed else 0
 
 
+WEBVIEW2_URL = "https://developer.microsoft.com/microsoft-edge/webview2/"
+
+
+def _renderer_is_ancient() -> bool:
+    """True when pywebview is about to draw the UI with Internet Explorer.
+
+    Windows needs .NET 4.6.2+ and the WebView2 runtime. Without both, pywebview
+    falls back to MSHTML and only writes a log warning — which nothing here
+    reads, so the app would open on a blank window with nothing to explain it.
+    A Vite bundle cannot run in that engine at all.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        from webview.platforms import winforms
+
+        return getattr(winforms, "renderer", "") == "mshtml"
+    except Exception:  # noqa: BLE001  # Never block startup on the check itself.
+        return False
+
+
+def _webview_storage_path() -> str | None:
+    """Where WebView2 may keep its working files.
+
+    Left alone, pywebview points WebView2 at ``TemporaryDirectory().name`` --
+    a path whose object is garbage collected immediately, so it can be deleted
+    out from under the browser -- or, if it falls back to the folder beside the
+    exe, at somewhere unwritable when the portable build sits in Program Files.
+    A per-user directory is stable and always writable.
+    """
+    if sys.platform != "win32":
+        return None
+    from . import config
+
+    path = config.config_dir() / "webview"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        if not os.access(path, os.W_OK):
+            return None
+    except OSError:
+        return None  # pywebview's own fallback is better than refusing to start.
+    return str(path)
+
+
 def _fatal(message: str) -> None:
     """Report a startup failure. A windowed build has no console to print to."""
     print(message, file=sys.stderr)
@@ -146,6 +216,16 @@ def main() -> None:
 
     from .api_bridge import Api
 
+    if _renderer_is_ancient():
+        _fatal(
+            "Krevon Scribe needs the Microsoft Edge WebView2 runtime, which "
+            "this PC does not have.\n\n"
+            "Install it (the free Evergreen Runtime) from:\n"
+            f"{WEBVIEW2_URL}\n\n"
+            "Windows 11 and up-to-date Windows 10 include it already. "
+            "If the PC is older, .NET Framework 4.6.2 or newer is needed too."
+        )
+
     api = Api()
     window = webview.create_window(
         WINDOW_TITLE,
@@ -164,7 +244,11 @@ def main() -> None:
         # page rendered while the js_api bridge never attached, leaving the UI
         # with no window.pywebview.api to call. A real origin fixes that, and
         # costs nothing on macOS, where file:// happened to work.
-        webview.start(debug="--debug" in sys.argv, http_server=True)
+        webview.start(
+            debug="--debug" in sys.argv,
+            http_server=True,
+            storage_path=_webview_storage_path(),
+        )
     except RuntimeError as exc:
         if "Python.Runtime" not in str(exc):
             raise

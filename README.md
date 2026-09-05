@@ -264,6 +264,14 @@ Get-ChildItem -Recurse | Unblock-File
 
 Unzipping to a local drive rather than a network drive avoids it as well.
 
+**Windows: the window is blank, or the app says it needs WebView2** — the UI
+needs the Microsoft Edge WebView2 runtime and .NET Framework 4.6.2 or newer.
+Windows 11 and current Windows 10 have both. Without them pywebview silently
+falls back to the Internet Explorer engine, which cannot run the UI at all, so
+the app now checks and says so rather than opening a blank window. Install the
+free Evergreen Runtime from
+<https://developer.microsoft.com/microsoft-edge/webview2/>.
+
 **Windows: the window opens but says it could not start** — the frontend is
 served over `127.0.0.1` rather than `file://`, because pywebview does not fully
 support `file://` and on Windows the page rendered while the JavaScript bridge
