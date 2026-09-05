@@ -214,6 +214,58 @@ def word_language(word, languages=("en", "ar")):
     return ar if arabic * 2 >= len(letters) else en
 
 
+def _char_language(ch):
+    """Language of a single character, or None if it carries no script."""
+    import unicodedata
+
+    if ch.isspace() or ord(ch) in _ARABIC_DIGITS:
+        return None
+    if not unicodedata.category(ch).startswith("L"):
+        return None
+    return "ar" if any(lo <= ord(ch) <= hi for lo, hi in _ARABIC_RANGES) else "en"
+
+
+def split_mixed_words(words):
+    """Split a word token that holds both scripts into one token per script.
+
+    At a switch the model sometimes emits the last word of one language and the
+    first of the next as a single token — " secret؟هيكون" — because it never saw
+    a space between them. Left alone that token lands wholly in one language and
+    welds two sentences together in the subtitle.
+
+    The split time is apportioned by character count, which is crude; it does not
+    need to be better, because forced alignment re-times every word afterwards.
+    """
+    out = []
+    for word in words:
+        text = word["word"]
+        groups = []          # [language, characters]
+        for ch in text:
+            lang = _char_language(ch)
+            if groups and (lang is None or groups[-1][0] == lang):
+                groups[-1][1] += ch
+            elif groups and groups[-1][0] is None:
+                groups[-1][0], groups[-1][1] = lang, groups[-1][1] + ch
+            else:
+                groups.append([lang, ch])
+
+        if len([g for g in groups if g[0] is not None]) < 2:
+            out.append(word)
+            continue
+
+        start, end = float(word["start"]), float(word["end"])
+        span = end - start
+        letters = sum(len(g[1]) for g in groups) or 1
+        cursor = start
+        for _, chunk in groups:
+            piece_end = cursor + span * len(chunk) / letters
+            out.append({**word, "word": chunk,
+                        "start": round(cursor, 3), "end": round(piece_end, 3)})
+            cursor = piece_end
+        out[-1]["end"] = round(end, 3)
+    return out
+
+
 def script_runs(words, min_run, languages=("en", "ar")):
     """Group words into runs of a single script, then drop momentary flickers.
 
@@ -290,7 +342,7 @@ def transcribe_with_code_switch_model(WhisperModel, settings, device, has_gpu, p
     log(f"code-switch model loaded (compute_type={compute_type})")
 
     language = settings["cs_language"] or None
-    words = _pass_words(model, pcm, language, settings)
+    words = split_mixed_words(_pass_words(model, pcm, language, settings))
     log(f"  {len(words)} words")
 
     runs = script_runs(words, float(settings["min_run"]), languages)

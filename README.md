@@ -50,7 +50,7 @@ drag onto its own track.
 |---|---|---|
 | Model | `whisper-medium-arabic-codeswitched` | Melia 1 |
 | Arabic/English code-switching | native, one pass | native, one pass |
-| Language accuracy on the test clip | **95.4%** | not yet measured |
+| Language accuracy on the test clip | **96.1%** | not yet measured |
 | Language per word | read off the script | reported by the model |
 | Timestamps | re-timed by CTC forced alignment | reported by the model |
 | Cost | free | $100 starting credit, no card |

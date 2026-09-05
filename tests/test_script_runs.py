@@ -127,7 +127,7 @@ def test_runs_tile_the_timeline_without_gaps_or_overlap(kernel):
 
 # --- against the hand-marked spans ---------------------------------------
 
-def test_scores_above_ninety_percent_on_the_marked_clip(kernel):
+def test_scores_above_ninety_five_percent_on_the_marked_clip(kernel):
     """Regression guard on the real numbers, not a synthetic case.
 
     The word list is the code-switch model's actual output for the test clip;
@@ -137,7 +137,7 @@ def test_scores_above_ninety_percent_on_the_marked_clip(kernel):
     fixture = json.loads(
         (ROOT / "tests" / "fixtures" / "codeswitch_words.json").read_text(encoding="utf-8")
     )
-    runs = kernel.script_runs(fixture["words"], 1.5)
+    runs = kernel.script_runs(kernel.split_mixed_words(fixture["words"]), 1.5)
 
     spans = [(s["start"], s["end"], s["language"]) for s in truth["spans"]]
     total = spans[-1][1]
@@ -152,7 +152,7 @@ def test_scores_above_ninety_percent_on_the_marked_clip(kernel):
                 correct += 1
         t += step
     accuracy = correct / counted
-    assert accuracy > 0.90, f"language accuracy fell to {accuracy:.1%}"
+    assert accuracy > 0.95, f"language accuracy fell to {accuracy:.1%}"
     assert len(runs) == len(spans), f"found {len(runs)} runs, expected {len(spans)}"
 
 
@@ -203,3 +203,45 @@ def test_existing_spacing_is_not_doubled(kernel):
         "en",
     )
     assert cue["text"] == "chicken bath"
+
+
+# --- split_mixed_words ----------------------------------------------------
+
+def test_a_token_holding_both_scripts_is_split(kernel):
+    # The real case: the model emitted " secret؟هيكون" as one word.
+    out = kernel.split_mixed_words(
+        [{"start": 13.76, "end": 14.96, "word": " secret؟هيكون", "probability": 0.8}]
+    )
+    assert [w["word"] for w in out] == [" secret؟", "هيكون"]
+    assert out[0]["start"] == pytest.approx(13.76)
+    assert out[1]["end"] == pytest.approx(14.96)
+    assert out[0]["end"] == out[1]["start"]
+
+
+def test_a_single_script_token_is_untouched(kernel):
+    word = {"start": 0.0, "end": 0.5, "word": " chicken", "probability": 0.9}
+    assert kernel.split_mixed_words([word]) == [word]
+
+
+def test_an_arabic_only_token_is_untouched(kernel):
+    word = {"start": 0.0, "end": 0.5, "word": "الحمام", "probability": 0.9}
+    assert kernel.split_mixed_words([word]) == [word]
+
+
+def test_the_split_keeps_every_character(kernel):
+    out = kernel.split_mixed_words(
+        [{"start": 0.0, "end": 1.0, "word": "abcمرحباdef", "probability": 0.9}]
+    )
+    assert "".join(w["word"] for w in out) == "abcمرحباdef"
+
+
+def test_split_pieces_get_their_own_language(kernel):
+    out = kernel.split_mixed_words(
+        [{"start": 0.0, "end": 1.0, "word": " secret؟هيكون", "probability": 0.8}]
+    )
+    assert [kernel.word_language(w["word"]) for w in out] == ["en", "ar"]
+
+
+def test_punctuation_only_tokens_survive_unsplit(kernel):
+    word = {"start": 0.0, "end": 0.2, "word": " ...", "probability": 0.5}
+    assert kernel.split_mixed_words([word]) == [word]

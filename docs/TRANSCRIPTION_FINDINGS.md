@@ -49,9 +49,15 @@ Scored per 10 ms against the hand-marked spans:
 | `IbrahimAmin/code-switched-egyptian-arabic-whisper-small` | 93.5% |
 | `Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched` | **94.7%** |
 
-End to end on the timeline the chosen model scores **95.4%**, recovers exactly
+End to end on the timeline the chosen model scores **96.1%**, recovers exactly
 six spans matching the six marked ones, and misroutes no cue at all — the only
 remaining error is silence between cues that no cue covers.
+
+At a switch the model sometimes emits the last word of one language and the
+first of the next as a single token, ` secret؟هيكون`, having never seen a space
+between them. Splitting such tokens at the script boundary and apportioning the
+time by character count is worth **+1.4 points** on its own (94.7% → 96.1%), and
+stops two sentences being welded into one cue.
 
 What the difference looks like in the text, same audio:
 
