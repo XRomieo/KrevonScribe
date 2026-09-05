@@ -60,6 +60,7 @@ def selftest() -> int:
     network and no credentials. CI runs it against the frozen executable.
     """
     import importlib
+    import time
 
     results: list[tuple[bool, str]] = []
 
@@ -110,18 +111,31 @@ def selftest() -> int:
         # The window is drawn from a local HTTP server now, not file://. That
         # server is the single point everything else depends on, so start the
         # real one against the real frontend and fetch the page back.
+        import urllib.error
         import urllib.request
 
         from webview import http as wv_http
 
         index = frontend_index()
         address, _, server = wv_http.start_server(urls=[str(index)], http_port=None)
+        url = f"{address}/index.html"
+        # An empty ProxyHandler stops urllib from sending a loopback request to
+        # whatever proxy the environment names, which is how this hangs on a CI
+        # runner. The server also starts in a thread, so give it a few tries.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(f"{address}/index.html", timeout=10) as r:
-                body = r.read()
-            assert r.status == 200, r.status
-            assert b"<div id=\"root\">" in body, body[:200]
-            return f"{len(body)} bytes from {address}"
+            last: Exception | None = None
+            for _ in range(15):
+                try:
+                    with opener.open(url, timeout=2) as r:
+                        body = r.read()
+                    assert r.status == 200, r.status
+                    assert b"<div id=\"root\">" in body, body[:200]
+                    return f"{len(body)} bytes from {address}"
+                except (urllib.error.URLError, OSError) as exc:
+                    last = exc
+                    time.sleep(0.5)
+            raise AssertionError(f"no answer from {url}: {last}")
         finally:
             getattr(server, "shutdown", lambda: None)()
 
