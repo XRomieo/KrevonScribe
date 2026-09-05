@@ -98,6 +98,7 @@ def run(
             align=settings.forced_alignment,
             code_switch_method=settings.code_switch_method,
             cs_model=settings.code_switch_model,
+            cue_script_policy=settings.cue_script_policy,
             output_dir=Path(settings.srt_dir) / "_kaggle" / base,
             progress=say,
         )

@@ -45,6 +45,10 @@ DEFAULTS = {
     "code_switch_method": "model",
     "cs_model": "Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched",
     "cs_language": "ar",
+    # "mixed" keeps a sentence whole even when the speaker switches inside it
+    # ("بدنا نحمل ال chickens" is one phrase). "split" never lets a cue hold two
+    # scripts, at the cost of some very short cues.
+    "cue_script_policy": "mixed",
     # Shortest script run kept when it interrupts a longer stretch of the other
     # language. Below ~1s the merge is measurably worse; 1.0-3.0 all score the
     # same, so this sits in the middle of that plateau.
@@ -349,18 +353,33 @@ def transcribe_with_code_switch_model(WhisperModel, settings, device, has_gpu, p
     for a, b, lang in runs:
         log(f"  run {a:6.2f}-{b:6.2f}s -> {lang}")
 
+    # Cues may follow the raw script changes rather than the merged runs. The
+    # merged runs stay the answer for *routing* either way -- they are what the
+    # language spans are scored against.
+    policy = str(settings["cue_script_policy"] or "mixed")
+    cue_settings = dict(settings)
+    if policy == "split":
+        cue_runs = script_runs(words, 0.0, languages)
+        # A one-word switch is genuinely short; the usual floor would delete it.
+        cue_settings["min_cue_duration"] = min(
+            float(settings["min_cue_duration"]), 0.15
+        )
+        log(f"  splitting cues at {len(cue_runs)} raw script changes")
+    else:
+        cue_runs = runs
+
     def owner(t):
-        for a, b, lang in runs:
+        for a, b, lang in cue_runs:
             if a <= t < b:
                 return lang
-        return runs[-1][2] if runs else languages[0]
+        return cue_runs[-1][2] if cue_runs else languages[0]
 
     words_by_lang = {}
-    for word in words:
+    for index, word in enumerate(words):
         lang = owner((float(word["start"]) + float(word["end"])) / 2.0)
-        words_by_lang.setdefault(lang, []).append(word)
+        words_by_lang.setdefault(lang, []).append({**word, "seq": index})
 
-    return cues_from_words(words_by_lang, runs, settings), runs
+    return cues_from_words(words_by_lang, cue_runs, cue_settings), runs
 
 
 def language_spans_from_words(words_by_lang, total, settings):
@@ -484,8 +503,17 @@ def cues_from_words(words_by_lang, spans, settings):
             if current:
                 previous = current[-1]
                 text_so_far = "".join(w["word"] for w in current).strip()
+                # A word of the other language in between ends this cue even
+                # when the clock gap is small. Without this, "بدنا نحمل ال" and
+                # a "بنحملها" two seconds later fuse into one cue that overlaps
+                # the English it was interrupted by.
+                interrupted = (
+                    "seq" in word and "seq" in previous
+                    and word["seq"] != previous["seq"] + 1
+                )
                 if (
-                    start_t - float(previous["end"]) > max_gap
+                    interrupted
+                    or start_t - float(previous["end"]) > max_gap
                     or len(text_so_far) >= max_chars
                     or end_t - float(current[0]["start"]) > max_duration
                     or text_so_far.endswith(sentence_end)
@@ -510,6 +538,35 @@ def cues_from_words(words_by_lang, spans, settings):
 _LEADING_PUNCTUATION = " .,;:!?\u060c\u061b\u061f\u06d4\u2026-"
 
 
+# The model emits Arabic punctuation after English words ("Why؟") because it
+# learned the two together. Mapped back only where the *preceding letter* is
+# Latin: Latin punctuation inside Arabic text is ordinary and is left alone.
+_ARABIC_TO_LATIN_PUNCTUATION = {
+    "\u061f": "?", "\u060c": ",", "\u061b": ";", "\u06d4": ".",
+}
+
+
+def normalise_punctuation(text):
+    """Rewrite Arabic punctuation that trails Latin words.
+
+    Decided per mark from the nearest preceding letter, not from the cue's
+    language, because a cue may legitimately hold both scripts -- the speaker
+    switches mid-sentence, and "ال chickens" is one phrase.
+    """
+    out = []
+    previous = None            # language of the last letter seen
+    for ch in text:
+        replacement = _ARABIC_TO_LATIN_PUNCTUATION.get(ch)
+        if replacement is not None and previous == "en":
+            out.append(replacement)
+            continue
+        language = _char_language(ch)
+        if language is not None:
+            previous = language
+        out.append(ch)
+    return "".join(out)
+
+
 def _finish_cue(words, lang):
     # Whisper's word tokens carry their own leading space for Latin script but
     # not for Arabic, so concatenating blindly fuses the two across a switch
@@ -520,7 +577,7 @@ def _finish_cue(words, lang):
         if text and not text[-1].isspace() and not piece[:1].isspace():
             text += " "
         text += piece
-    text = text.lstrip(_LEADING_PUNCTUATION).strip()
+    text = normalise_punctuation(text).lstrip(_LEADING_PUNCTUATION).strip()
     return {
         "start": round(float(words[0]["start"]), 3),
         "end": round(float(words[-1]["end"]), 3),

@@ -193,7 +193,8 @@ def test_words_are_separated_across_a_script_change(kernel):
          {"start": 0.6, "end": 1.2, "word": "هيكون"}],
         "en",
     )
-    assert cue["text"] == "secret؟ هيكون"
+    # The "؟" trails an English word, so it is normalised to "?" on the way out.
+    assert cue["text"] == "secret? هيكون"
 
 
 def test_existing_spacing_is_not_doubled(kernel):
@@ -245,3 +246,31 @@ def test_split_pieces_get_their_own_language(kernel):
 def test_punctuation_only_tokens_survive_unsplit(kernel):
     word = {"start": 0.0, "end": 0.2, "word": " ...", "probability": 0.5}
     assert kernel.split_mixed_words([word]) == [word]
+
+
+# --- punctuation ----------------------------------------------------------
+
+def test_an_arabic_question_mark_after_english_becomes_latin(kernel):
+    assert kernel.normalise_punctuation("Why؟") == "Why?"
+
+
+def test_an_arabic_question_mark_after_arabic_is_left_alone(kernel):
+    assert kernel.normalise_punctuation("لماذا؟") == "لماذا؟"
+
+
+def test_each_mark_is_decided_by_the_letter_before_it(kernel):
+    # One cue, both scripts: the English clause is corrected, the Arabic is not.
+    assert kernel.normalise_punctuation("secret؟ لماذا؟") == "secret? لماذا؟"
+
+
+def test_latin_punctuation_inside_arabic_is_not_arabised(kernel):
+    # Only the wrong direction is corrected; this reads fine as it is.
+    assert kernel.normalise_punctuation("الحمام, نعم") == "الحمام, نعم"
+
+
+def test_the_arabic_comma_after_english_becomes_a_latin_comma(kernel):
+    assert kernel.normalise_punctuation("shadow،") == "shadow,"
+
+
+def test_punctuation_before_any_letter_is_untouched(kernel):
+    assert kernel.normalise_punctuation("؟ لماذا") == "؟ لماذا"

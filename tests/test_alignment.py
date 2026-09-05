@@ -86,3 +86,52 @@ def test_a_failing_romaniser_falls_back_to_the_raw_word(kernel):
         raise RuntimeError("uroman exploded")
 
     assert kernel._romanised("Bath", boom) == "bath"
+
+
+# --- cue breaks at an interruption ----------------------------------------
+
+def test_a_cue_ends_where_the_other_language_interrupts(kernel):
+    """Words either side of an interruption must not fuse into one cue.
+
+    They are close in time, so the pause rule does not catch them; only the
+    fact that a word of the other language sat between them does. Fusing them
+    produced cues that overlapped the ones they were interrupted by.
+    """
+    settings = dict(kernel.DEFAULTS)
+    words_by_lang = {
+        "ar": [
+            {"start": 0.0, "end": 0.5, "word": "بدنا", "seq": 0},
+            {"start": 1.0, "end": 1.5, "word": "بنحملها", "seq": 2},
+        ],
+    }
+    spans = [(0.0, 2.0, "ar")]
+    cues = kernel.cues_from_words(words_by_lang, spans, settings)
+    assert len(cues) == 2
+    assert cues[0]["end"] <= cues[1]["start"]
+
+
+def test_consecutive_words_still_share_a_cue(kernel):
+    settings = dict(kernel.DEFAULTS)
+    words_by_lang = {
+        "en": [
+            {"start": 0.0, "end": 0.5, "word": "chicken", "seq": 0},
+            {"start": 0.5, "end": 1.0, "word": " bath", "seq": 1},
+        ],
+    }
+    cues = kernel.cues_from_words(words_by_lang, [(0.0, 2.0, "en")], settings)
+    assert len(cues) == 1
+    assert cues[0]["text"] == "chicken bath"
+
+
+def test_words_without_a_sequence_are_unaffected(kernel):
+    # The older confidence route builds word lists per language pass, where
+    # there is no shared sequence to compare against.
+    settings = dict(kernel.DEFAULTS)
+    words_by_lang = {
+        "en": [
+            {"start": 0.0, "end": 0.5, "word": "chicken"},
+            {"start": 0.5, "end": 1.0, "word": " bath"},
+        ],
+    }
+    cues = kernel.cues_from_words(words_by_lang, [(0.0, 2.0, "en")], settings)
+    assert len(cues) == 1
