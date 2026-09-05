@@ -53,6 +53,47 @@ export const isNative = () => typeof window.pywebview !== "undefined"
 /** One method that must exist before any call can be made. */
 const PROBE = "get_bootstrap"
 
+/**
+ * The Python bridge, exactly as pywebview would describe it.
+ *
+ * pywebview creates `window.pywebview` with an empty `api` and fills it from a
+ * second injected script. On Windows that second script does not always take,
+ * leaving a bridge object with no methods on it and nothing to call. The
+ * functions it builds only use `_jsApiCallback` and `_checkValue`, both defined
+ * in the first script, so the page can build them itself from the same list.
+ * tests/test_bridge_methods.py fails if this drifts from the Python class.
+ */
+const BRIDGE_METHODS = [
+  { func: "choose_audio_file", params: ["current"] },
+  { func: "choose_folder", params: ["current"] },
+  { func: "get_bootstrap", params: [] },
+  { func: "get_resolve_state", params: [] },
+  { func: "is_running", params: [] },
+  { func: "open_external", params: ["url"] },
+  { func: "reveal", params: ["path"] },
+  { func: "save_kaggle_credentials", params: ["values"] },
+  { func: "save_settings", params: ["values"] },
+  { func: "start_run", params: ["options"] },
+]
+
+type PyWebview = {
+  api?: Record<string, unknown>
+  _createApi?: (list: { func: string; params: string[] }[]) => void
+}
+
+/** Rebuild the API when pywebview left it empty. Returns whether it worked. */
+function rebuildBridge(): boolean {
+  const pw = window.pywebview as unknown as PyWebview | undefined
+  if (!pw || typeof pw._createApi !== "function") return false
+  if (typeof pw.api?.[PROBE] === "function") return true
+  try {
+    pw._createApi(BRIDGE_METHODS)
+  } catch {
+    return false
+  }
+  return typeof pw.api?.[PROBE] === "function"
+}
+
 const bridgeApi = () =>
   window.pywebview?.api as Record<string, (...a: unknown[]) => Promise<unknown>> | undefined
 
@@ -93,9 +134,16 @@ export function ready(timeoutMs = 20000): Promise<boolean> {
     // rather than resolving outright; the poll below is what usually wins.
     window.addEventListener("pywebviewready", () => { if (bridgeUsable()) finish(true) })
     const t0 = Date.now()
+    let rebuilt = false
     const tick = () => {
       if (bridgeUsable()) return finish(true)
-      if (Date.now() - t0 > budget) return finish(false)
+      const waited = Date.now() - t0
+      // Give pywebview a fair chance to finish on its own before stepping in.
+      if (!rebuilt && waited > 3000) {
+        rebuilt = true
+        if (rebuildBridge()) return finish(true)
+      }
+      if (waited > budget) return finish(false)
       setTimeout(tick, 60)
     }
     tick()

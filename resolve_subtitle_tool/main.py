@@ -242,6 +242,46 @@ def start_logging() -> Path | None:
     return path
 
 
+BRIDGE_PROBE = """(function () {
+  try {
+    var pw = window.pywebview;
+    return JSON.stringify({
+      url: String(location.href),
+      pywebview: typeof pw,
+      token: pw ? typeof pw.token : "n/a",
+      createApi: pw ? typeof pw._createApi : "n/a",
+      methods: pw && pw.api ? Object.keys(pw.api) : null,
+      errors: window.__diagErrors || []
+    });
+  } catch (e) { return JSON.stringify({ probeError: String(e) }); }
+})()"""
+
+
+def watch_bridge(window) -> None:
+    """Log what the page can actually see, a few times, then stop.
+
+    The JavaScript side cannot report a broken bridge over that same bridge, and
+    a windowed build has no console. Reading the page from Python sidesteps both:
+    evaluate_js is the Window API and does not depend on window.pywebview.api
+    being populated.
+    """
+    import logging
+    import threading
+    import time
+
+    log = logging.getLogger(__name__)
+
+    def run() -> None:
+        for delay in (5, 10, 25):
+            time.sleep(delay if delay == 5 else delay - 5)
+            try:
+                log.info("bridge after ~%ss: %s", delay, window.evaluate_js(BRIDGE_PROBE))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("bridge probe failed after ~%ss: %s", delay, exc)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _fatal(message: str) -> None:
     """Report a startup failure. A windowed build has no console to print to."""
     print(message, file=sys.stderr)
@@ -292,6 +332,7 @@ def main() -> None:
         background_color="#0f0e13",
     )
     api._window = window  # underscored on purpose; see Api.__init__
+    watch_bridge(window)
     # debug=True opens the inspector; keep it off for released builds.
     try:
         # http_server=True serves the frontend over 127.0.0.1 instead of file://.

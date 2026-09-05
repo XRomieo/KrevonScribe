@@ -7,6 +7,17 @@
     <title>Krevon Scribe</title>
   </head>
   <body>
+    <script>
+      // Captured so the Python side can read them back; a packaged Windows
+      // build has no console and a broken bridge cannot report itself.
+      window.__diagErrors = [];
+      addEventListener("error", function (e) {
+        window.__diagErrors.push(String(e.message || e.type));
+      });
+      addEventListener("unhandledrejection", function (e) {
+        window.__diagErrors.push("unhandled: " + String(e.reason));
+      });
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
