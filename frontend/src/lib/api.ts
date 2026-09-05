@@ -42,30 +42,50 @@ export function onAppEvent(fn: (e: AppEvent) => void) {
 }
 
 /**
- * Whether we are inside pywebview at all, which decides real bridge vs mock.
- *
- * Deliberately checks `window.pywebview` and not `.api`: pywebview creates the
- * api object before it attaches the methods, and a stricter test here would
- * make a real run briefly look like a browser and serve it mock data.
+ * True only in a `bun run dev` build. Vite replaces this with a literal, so
+ * everything guarded by it is dropped from the packaged bundle -- which is the
+ * point: a shipped app must never be able to fall back to mock data.
  */
+const DEV = import.meta.env.DEV
+
 export const isNative = () => typeof window.pywebview !== "undefined"
 
 /** One method that must exist before any call can be made. */
 const PROBE = "get_bootstrap"
 
-const bridgeUsable = () =>
-  typeof (window.pywebview?.api as Record<string, unknown> | undefined)?.[PROBE] === "function"
+const bridgeApi = () =>
+  window.pywebview?.api as Record<string, (...a: unknown[]) => Promise<unknown>> | undefined
+
+const bridgeUsable = () => typeof bridgeApi()?.[PROBE] === "function"
+
+/** Whether this build is answering from the mock rather than Python. */
+export const usingMock = () => DEV && !bridgeUsable()
+
+/** What the bridge looked like, for an error the user can send on. */
+export function bridgeReport(): string {
+  const api = bridgeApi()
+  const methods = api ? Object.keys(api) : []
+  return [
+    `page ${window.location.protocol}//${window.location.host || "(none)"}`,
+    `window.pywebview ${typeof window.pywebview}`,
+    `.api ${typeof api}`,
+    `methods ${methods.length ? methods.join(" ") : "none"}`,
+  ].join(" · ")
+}
 
 /**
  * Resolves once the bridge can actually be called.
  *
- * pywebview's own docs warn that `pywebview.api` is not guaranteed to be ready
- * when the page loads, so waiting for the object to appear is not enough — on
- * Windows the object shows up empty and the methods land a moment later. Wait
- * for a method instead, and give WebView2 room to cold-start.
+ * pywebview's docs warn that `pywebview.api` is not ready when the page loads,
+ * and neither is `window.pywebview` itself -- an earlier version of this gave
+ * up on the first tick because that object was missing, and the app quietly
+ * served mock data for the rest of the session. Keep polling for the whole
+ * budget and let the caller decide what an absent bridge means.
  */
-export function ready(timeoutMs = 15000): Promise<boolean> {
+export function ready(timeoutMs = 20000): Promise<boolean> {
   if (bridgeUsable()) return Promise.resolve(true)
+  // A dev build has no Python behind it and should reach the mock immediately.
+  const budget = DEV ? 600 : timeoutMs
   return new Promise((resolve) => {
     let done = false
     const finish = (v: boolean) => { if (!done) { done = true; resolve(v) } }
@@ -75,8 +95,7 @@ export function ready(timeoutMs = 15000): Promise<boolean> {
     const t0 = Date.now()
     const tick = () => {
       if (bridgeUsable()) return finish(true)
-      if (!isNative()) return finish(false)   // plain browser: fall through to the mock
-      if (Date.now() - t0 > timeoutMs) return finish(false)
+      if (Date.now() - t0 > budget) return finish(false)
       setTimeout(tick, 60)
     }
     tick()
@@ -236,16 +255,15 @@ export async function callWithRetry<T>(
 export const api: PyApi = new Proxy({} as PyApi, {
   get(_t, prop: string) {
     return (...args: unknown[]) => {
-      const impl = (isNative() ? window.pywebview!.api : mock) as unknown as
-        Record<string, (...a: unknown[]) => Promise<unknown>>
+      // Real bridge whenever there is one. The mock is reachable only in a dev
+      // build, so a packaged app fails loudly instead of inventing a timeline.
+      const impl = bridgeApi()
+        ?? (DEV ? (mock as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>) : undefined)
       const fn = impl?.[prop]
       if (typeof fn !== "function") {
         // Minified, the bare call reads "(intermediate value)[t] is not a
         // function", which says nothing about what went wrong. Name it.
-        const found = Object.keys(impl ?? {}).join(", ") || "nothing"
-        throw new Error(
-          `The Python bridge has no ${prop}(). It is exposing: ${found}.`,
-        )
+        throw new Error(`Python bridge missing ${prop}(). ${bridgeReport()}`)
       }
       return fn(...args)
     }

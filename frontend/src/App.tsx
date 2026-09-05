@@ -9,7 +9,7 @@ import { SettingsSheet } from "@/components/SettingsSheet"
 import { Mark } from "@/components/Mark"
 import { Switch } from "@/components/ui/switch"
 
-import { api, callWithRetry, isNative, onAppEvent, ready } from "@/lib/api"
+import { api, bridgeReport, callWithRetry, onAppEvent, ready, usingMock } from "@/lib/api"
 import { furthest, stageOf, type StageId } from "@/lib/stages"
 import type { Bootstrap, KaggleStatus, Res, RunOutcome, Settings, TimelineInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -59,11 +59,14 @@ export default function App() {
     let cancelled = false
     void (async () => {
       const bridged = await ready()
-      if (!bridged && isNative()) {
+      if (!bridged && !usingMock()) {
+        // Never carry on into the mock here: a packaged app that does invents a
+        // timeline and audio tracks that do not exist.
         if (!cancelled) {
           setFatal(
-            "The window opened but never connected to the Python side. "
-            + "Closing Krevon Scribe and starting it again usually clears this.",
+            "The window opened but never connected to the Python side, so "
+            + "there is nothing to read Resolve with. Restarting Krevon Scribe "
+            + "usually clears it.\n\n" + bridgeReport(),
           )
         }
         return

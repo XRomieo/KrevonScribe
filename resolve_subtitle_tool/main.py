@@ -209,6 +209,39 @@ def _webview_storage_path() -> str | None:
     return str(path)
 
 
+def start_logging() -> Path | None:
+    """Record this run to a file, overwriting the last one.
+
+    A windowed Windows build has no console, so when the app misbehaves there
+    is nothing to read. pywebview logs which renderer it chose and how the page
+    loaded at debug level, which is exactly what is needed to tell "the bridge
+    never arrived" apart from "the bridge was slow".
+    """
+    import logging
+
+    from . import config
+
+    path = config.config_dir() / "last-run.log"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(path, mode="w", encoding="utf-8")
+    except OSError:
+        return None
+    # pywebview takes its level from the environment and defaults to INFO, so
+    # the interesting lines -- which renderer it picked, what URL it loaded --
+    # are missing without this. Set before webview is imported.
+    os.environ.setdefault("PYWEBVIEW_LOG", "DEBUG")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    # INFO at the root keeps the network libraries quiet; webview is the part
+    # worth reading in full.
+    root.setLevel(logging.INFO)
+    logging.getLogger("pywebview").setLevel(logging.DEBUG)
+    logging.getLogger("webview").setLevel(logging.DEBUG)
+    return path
+
+
 def _fatal(message: str) -> None:
     """Report a startup failure. A windowed build has no console to print to."""
     print(message, file=sys.stderr)
@@ -226,9 +259,17 @@ def main() -> None:
     if "--selftest" in sys.argv:
         raise SystemExit(selftest())
 
+    log_path = start_logging()
+
     import webview
 
     from .api_bridge import Api
+
+    import logging
+
+    logging.getLogger(__name__).info(
+        "Krevon Scribe starting on %s, frontend %s", sys.platform, frontend_index(),
+    )
 
     if _renderer_is_ancient():
         _fatal(
@@ -276,6 +317,7 @@ def main() -> None:
             "    Get-ChildItem -Recurse | Unblock-File\n\n"
             "Then start Krevon Scribe again. Unzipping to a local drive rather "
             "than a network drive avoids this too."
+            + (f"\n\nDetails were written to:\n{log_path}" if log_path else "")
         )
 
 

@@ -36,6 +36,7 @@ def build_frontend(skip_install: bool) -> None:
     dist = FRONTEND / "dist"
     if not (dist / "index.html").is_file():
         raise SystemExit(f"Frontend build produced no index.html in {dist}")
+    check_no_mock(dist)
     if STAGED.exists():
         shutil.rmtree(STAGED)
     shutil.copytree(dist, STAGED)
@@ -59,6 +60,24 @@ EXE_CONFIG = """<?xml version="1.0" encoding="utf-8"?>
   </startup>
 </configuration>
 """
+
+
+# Strings that exist only in the browser mock. A shipped build reaching the
+# mock once already put an invented timeline and three audio tracks in front of
+# a user while Resolve was not even open, so make it a build failure.
+MOCK_FINGERPRINTS = ("Interview B", "Ramadan Doc", "EP04 Rough Cut", "Music Bed")
+
+
+def check_no_mock(dist: Path) -> None:
+    for js in dist.rglob("*.js"):
+        text = js.read_text(encoding="utf-8", errors="ignore")
+        found = [m for m in MOCK_FINGERPRINTS if m in text]
+        if found:
+            raise SystemExit(
+                f"The browser mock reached the production bundle ({js.name}): "
+                f"{', '.join(found)}.\nIt must stay behind import.meta.env.DEV."
+            )
+    print("Checked: no mock data in the production bundle")
 
 
 def build_bundle() -> None:
