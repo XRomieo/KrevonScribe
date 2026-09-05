@@ -52,7 +52,7 @@ drag onto its own track.
 | Arabic/English code-switching | native, one pass | inferred, four passes |
 | Mixed error rate (published benchmark) | **15.1%** | — (Whisper is not in that table) |
 | Language per word | reported by the model | inferred from confidences |
-| Cost | 10 hours a month free | free |
+| Cost | $100 starting credit, no card | free |
 | Setup | one API key | Kaggle account, phone-verified |
 | Sends audio to | Speechmatics | Kaggle |
 

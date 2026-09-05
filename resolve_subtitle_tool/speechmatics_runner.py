@@ -80,8 +80,8 @@ def submit(
         )
     if response.status_code == 403:
         raise SpeechmaticsError(
-            "Speechmatics refused the job (403). The free allowance is 10 hours a "
-            "month; check usage at https://portal.speechmatics.com/"
+            "Speechmatics refused the job (403). Your starting credit may be "
+            "spent; check the balance at https://portal.speechmatics.com/"
         )
     if not response.ok:
         raise SpeechmaticsError(
@@ -245,8 +245,8 @@ def transcribe(
         raise SpeechmaticsError(f"Audio file not found: {audio_path}")
     if not (api_key or "").strip():
         raise SpeechmaticsError(
-            "No Speechmatics API key. Add one in Settings — the free tier covers "
-            "10 hours a month: https://portal.speechmatics.com/"
+            "No Speechmatics API key. Add one in Settings — a new account gets "
+            "$100 of credit, no card: https://portal.speechmatics.com/"
         )
 
     say(f"Uploading {audio_path.name} ({audio_path.stat().st_size / 1e6:.1f} MB) to Speechmatics…")
