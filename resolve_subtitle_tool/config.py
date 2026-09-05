@@ -63,8 +63,16 @@ class Settings:
     # every append lands on the subtitle track that already holds cues.
     primary_language: str = "en"
     single_track: bool = True
+    # Re-time cue text against the audio with CTC forced alignment after
+    # transcribing. Whisper infers its timestamps and they drift; the aligner
+    # measures them. Costs about a minute of GPU time.
+    forced_alignment: bool = True
+    # Delete existing subtitle tracks before importing. Off by default because
+    # it throws away work; without it a second run refuses to place anything,
+    # since Resolve sends every import to the track that already holds cues.
+    replace_existing_subtitles: bool = False
     # "speechmatics" (Melia 1: one pass, native code-switching, per-word language
-    # tags, 10 free hours a month) or "kaggle" (free whisper on a Kaggle GPU).
+    # tags) or "kaggle" (free whisper on a Kaggle GPU).
     backend: str = "kaggle"
     speechmatics_api_key: str = ""
 

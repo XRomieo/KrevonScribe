@@ -10,6 +10,7 @@ pip-install faster-whisper and to pull the model weights on first run.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -42,6 +43,11 @@ DEFAULTS = {
     "max_chars": 84,
     "max_duration": 6.0,
     "min_cue_duration": 0.25,
+    # Forced alignment: whisper's own word times drift, so the cue text is
+    # re-timed against the audio by a CTC aligner afterwards.
+    "align": True,
+    "align_chunk": 120.0,
+    "align_pad": 2.0,
 }
 
 
@@ -49,17 +55,29 @@ def log(msg):
     print(f"[transcribe] {msg}", flush=True)
 
 
+def _pip(*packages):
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--quiet", *packages]
+    )
+
+
 def ensure_dependency():
     try:
         import faster_whisper  # noqa: F401
         log("faster-whisper already present")
-        return
     except ImportError:
-        pass
-    log("installing faster-whisper…")
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "--quiet", "faster-whisper"]
-    )
+        log("installing faster-whisper…")
+        _pip("faster-whisper")
+
+
+def ensure_aligner_dependency():
+    """uroman only; torchaudio ships with the Kaggle image and carries MMS_FA."""
+    try:
+        import uroman  # noqa: F401
+        log("uroman already present")
+    except ImportError:
+        log("installing uroman…")
+        _pip("uroman")
 
 
 def find_inputs():
@@ -300,6 +318,158 @@ def _finish_cue(words, lang):
     }
 
 
+# --------------------------------------------------------------- alignment
+
+# The MMS aligner's dictionary is lowercase Latin plus an apostrophe: nothing else.
+_ROMAN_KEEP = re.compile(r"[^a-z']")
+
+
+def _make_romaniser():
+    """Return a callable that transliterates any script into Latin.
+
+    uroman covers both of our scripts in one call — Arabic is transliterated and
+    Latin passes through nearly unchanged — which is what lets a *bilingual*
+    transcript be aligned in a single pass instead of one pass per language.
+    """
+    import uroman as uroman_module
+
+    instance = uroman_module.Uroman()
+    return instance.romanize_string
+
+
+def _romanised(word, romanise):
+    try:
+        text = romanise(word)
+    except Exception:
+        text = word
+    return _ROMAN_KEEP.sub("", str(text).lower())
+
+
+def _chunk_cues(cues, order, chunk_seconds):
+    """Group cues into windows no longer than ``chunk_seconds``.
+
+    Aligning a whole feature-length timeline in one pass would blow up memory,
+    and a local window also stops one bad match from dragging the rest with it.
+    """
+    chunks, current = [], []
+    for i in order:
+        if current and cues[i]["end"] - cues[current[0]]["start"] > chunk_seconds:
+            chunks.append(current)
+            current = []
+        current.append(i)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _alignment_device(torch, device):
+    """Pick a device torch can actually execute on.
+
+    CTranslate2 running on the GPU says nothing about torch: Kaggle hands out
+    P100s (sm_60), and recent torch builds ship no kernels for them, so the
+    first CUDA op dies with "no kernel image is available". Probe with a
+    throwaway op instead of trusting ``cuda.is_available()``.
+    """
+    if device != "cuda":
+        return "cpu"
+    try:
+        torch.zeros(8, device="cuda").add_(1).cpu()
+        return "cuda"
+    except Exception as exc:
+        log(f"  torch cannot use this GPU ({exc}); aligning on CPU instead")
+        return "cpu"
+
+
+def align_cues(cues, pcm, sr, settings, device):
+    """Re-time cues against the audio using CTC forced alignment.
+
+    Whisper *infers* timestamps from its own decoder rather than measuring them,
+    and they drift — which is exactly what makes subtitles land off the speech.
+    Forced alignment asks a different question: given text we already trust,
+    where in the audio does each word actually occur? Only start/end change here;
+    the text is never touched.
+
+    Any chunk that fails keeps whisper's original times, because a confidently
+    wrong alignment is worse than a drifting one.
+    """
+    stats = {"aligned": 0, "kept": 0, "chunks": 0}
+    if not cues:
+        return cues, stats
+
+    import numpy as np
+    import torch
+    from torchaudio.pipelines import MMS_FA as bundle
+
+    romanise = _make_romaniser()
+    device = _alignment_device(torch, device)
+    stats["device"] = device
+    model = bundle.get_model().to(device)
+    tokenizer = bundle.get_tokenizer()
+    aligner = bundle.get_aligner()
+
+    order = sorted(range(len(cues)), key=lambda i: cues[i]["start"])
+    words_by_cue = {}
+    for i in order:
+        romanised = [_romanised(tok, romanise) for tok in cues[i]["text"].split()]
+        words_by_cue[i] = [r for r in romanised if r]
+
+    total = len(pcm) / sr
+    pad = float(settings["align_pad"])
+    aligned = {}
+
+    for chunk in _chunk_cues(cues, order, float(settings["align_chunk"])):
+        entries = [(i, r) for i in chunk for r in words_by_cue[i]]
+        if not entries:
+            continue
+        stats["chunks"] += 1
+        a = max(0.0, min(cues[i]["start"] for i in chunk) - pad)
+        b = min(total, max(cues[i]["end"] for i in chunk) + pad)
+        slice_ = pcm[int(a * sr):int(b * sr)]
+        if len(slice_) < sr // 10:
+            continue
+        try:
+            waveform = torch.from_numpy(np.ascontiguousarray(slice_)).unsqueeze(0)
+            with torch.inference_mode():
+                emission, _ = model(waveform.to(device))
+                spans = aligner(emission[0], tokenizer([r for _, r in entries]))
+            # The model strides the waveform, so frame indices map back to
+            # samples through this ratio rather than a fixed hop.
+            ratio = waveform.size(1) / emission.size(1)
+        except Exception as exc:
+            log(f"  alignment failed for {a:.1f}-{b:.1f}s, keeping whisper times: {exc}")
+            continue
+
+        per_cue = {}
+        for (index, _), span in zip(entries, spans):
+            start = a + ratio * span[0].start / sr
+            end = a + ratio * span[-1].end / sr
+            lo, hi = per_cue.get(index, (start, end))
+            per_cue[index] = (min(lo, start), max(hi, end))
+        for index, (start, end) in per_cue.items():
+            if end > start:
+                aligned[index] = (start, end)
+
+    out = []
+    for i, cue in enumerate(cues):
+        new = dict(cue)
+        times = aligned.get(i)
+        if times:
+            shift = times[0] - cue["start"]
+            new["start"], new["end"] = round(times[0], 3), round(times[1], 3)
+            new["shift"] = round(shift, 3)
+            stats["aligned"] += 1
+        else:
+            stats["kept"] += 1
+        out.append(new)
+    out.sort(key=lambda c: (c["start"], c.get("language", "")))
+
+    shifts = [abs(c["shift"]) for c in out if "shift" in c]
+    if shifts:
+        stats["median_shift"] = round(sorted(shifts)[len(shifts) // 2], 3)
+        stats["max_shift"] = round(max(shifts), 3)
+    return out, stats
+
+
 def _pass_words(model, audio, lang, settings, offset=0.0):
     """One forced-language decode, returned as absolute-timed words."""
     segments, _ = model.transcribe(
@@ -389,11 +559,12 @@ def main():
     started = time.time()
     language = None if settings["language"] in ("auto", "", None) else settings["language"]
     code_switch = bool(settings["code_switch"]) and language is None
+    sr = 16000
+    pcm = None
 
     if code_switch:
         from faster_whisper import decode_audio
 
-        sr = 16000
         pcm = decode_audio(str(audio), sampling_rate=sr)
         duration = len(pcm) / sr
         log(f"code-switch pass over {duration:.2f}s using {settings['languages']}")
@@ -435,6 +606,24 @@ def main():
         detected = info.language
         detected_p = round(info.language_probability, 4)
 
+    # Forced alignment last, so it re-times whichever path produced the cues.
+    align_stats = {}
+    if bool(settings["align"]) and out:
+        try:
+            ensure_aligner_dependency()
+            if pcm is None:
+                from faster_whisper import decode_audio
+
+                pcm = decode_audio(str(audio), sampling_rate=sr)
+            log("aligning cue text to the audio…")
+            out, align_stats = align_cues(out, pcm, sr, settings, device)
+            log(f"alignment: {align_stats}")
+        except Exception as exc:
+            # Whisper's drifting times still make usable subtitles; no alignment
+            # at all is better than failing the whole run over it.
+            log(f"WARNING: forced alignment unavailable, keeping whisper times: {exc}")
+            align_stats = {"error": str(exc)}
+
     WORKING.mkdir(parents=True, exist_ok=True)
     (WORKING / "segments.json").write_text(
         json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8"
@@ -446,6 +635,7 @@ def main():
                 "language_probability": detected_p,
                 "code_switch": code_switch,
                 "spans": span_summary,
+                "alignment": align_stats,
                 "duration": round(duration, 3),
                 "segment_count": len(out),
                 "model": settings["model"],

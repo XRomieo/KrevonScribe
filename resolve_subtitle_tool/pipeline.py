@@ -95,6 +95,7 @@ def run(
             model=settings.whisper_model,
             detect_model=settings.whisper_detect_model,
             language=settings.whisper_language,
+            align=settings.forced_alignment,
             output_dir=Path(settings.srt_dir) / "_kaggle" / base,
             progress=say,
         )
@@ -136,6 +137,13 @@ def run(
             "are relative to that file rather than to a timeline."
         )
         return outcome
+
+    if settings.replace_existing_subtitles:
+        try:
+            resolve_bridge.clear_subtitle_tracks(progress=say)
+        except resolve_bridge.ResolveError as exc:
+            warnings.append(f"Could not clear the existing subtitle tracks: {exc}")
+            say(f"! {exc}")
 
     if settings.single_track:
         # Resolve only ever displays one subtitle track, so both languages share

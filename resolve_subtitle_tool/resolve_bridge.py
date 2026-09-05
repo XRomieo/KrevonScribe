@@ -347,6 +347,31 @@ def place_srt_on_timeline(
     return placed
 
 
+def clear_subtitle_tracks(progress: Progress | None = None) -> int:
+    """Delete every subtitle track, so a re-run starts from a clean timeline.
+
+    Deleting is the only reliable reset: Resolve routes every import to whichever
+    track already holds cues, so a leftover track from a previous run silently
+    captures the next one. Returns the number of tracks removed.
+
+    Destructive by design — the caller is responsible for meaning it.
+    """
+    say = progress or (lambda _m: None)
+    resolve = connect()
+    _, timeline = _current(resolve)
+
+    removed = 0
+    # Delete from the top down; removing a lower track renumbers the ones above.
+    for index in range(timeline.GetTrackCount("subtitle"), 0, -1):
+        if timeline.DeleteTrack("subtitle", index):
+            removed += 1
+        else:
+            raise ResolveError(f"Resolve refused to delete subtitle track {index}.")
+    if removed:
+        say(f"Removed {removed} existing subtitle track(s).")
+    return removed
+
+
 def add_empty_subtitle_track(name: str | None = None) -> int:
     """Add an empty subtitle track for the user to drag the second SRT onto."""
     resolve = connect()
