@@ -8,9 +8,10 @@ The frontend must be built first; scripts/build.py handles the whole sequence.
 import sys
 from pathlib import Path
 
-APP_NAME = "ResolveSubtitles"
+APP_NAME = "KrevonScribe"
 ROOT = Path(SPECPATH)
 FRONTEND = ROOT / "resolve_subtitle_tool" / "frontend_dist"
+ASSETS = ROOT / "assets"
 
 if not (FRONTEND / "index.html").is_file():
     raise SystemExit(
@@ -64,6 +65,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,          # GUI app: no console window on Windows
+    icon=str(ASSETS / "krevon.ico") if sys.platform == "win32" else None,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -80,7 +82,12 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name=f"{APP_NAME}.app",
-        icon=None,
-        bundle_identifier="com.resolvesubtitles.app",
-        info_plist={"NSHighResolutionCapable": True, "LSMinimumSystemVersion": "11.0"},
+        icon=str(ASSETS / "krevon.icns"),
+        bundle_identifier="com.krevon.scribe",
+        info_plist={
+            "CFBundleName": "Krevon Scribe",
+            "CFBundleDisplayName": "Krevon Scribe",
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0",
+        },
     )

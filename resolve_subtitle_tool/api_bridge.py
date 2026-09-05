@@ -139,6 +139,26 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 
+    def open_external(self, url: str) -> dict:
+        """Open an https link in the user's real browser.
+
+        Getting a Kaggle token means visiting a page, and a webview window with
+        no address bar is a bad place to do that. Only https is honoured, so a
+        stray call cannot be turned into a local command.
+        """
+        try:
+            if not str(url).startswith("https://"):
+                return _err("Only https links can be opened.")
+            if sys.platform == "darwin":
+                subprocess.run(["open", url], check=False)
+            elif sys.platform == "win32":
+                subprocess.run(["cmd", "/c", "start", "", url], check=False)
+            else:
+                subprocess.run(["xdg-open", url], check=False)
+            return _ok()
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
     def reveal(self, path: str) -> dict:
         """Show a file or folder in Finder / Explorer."""
         try:

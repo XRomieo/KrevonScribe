@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Krevon Scribe">
+  <title>Krevon Scribe</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#272332"/>
+      <stop offset="1" stop-color="#141119"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS draws its own shadow and expects a margin around the squircle. -->
+  <g transform="translate(100 90)">
+    <rect width="824" height="824" rx="186" fill="url(#tile)"/>
+    <rect x="6" y="6" width="812" height="812" rx="180" fill="none" stroke="#ffffff1f" stroke-width="12"/>
+    <g transform="scale(12.875)" fill="none" stroke-linecap="round" stroke-width="8.5">
+      <path d="M16.5 15V49" stroke="#f4f1f6"/>
+      <path d="M28.5 31L45 16.5" stroke="#ff4d6d"/>
+      <path d="M28.5 33L45 47.5" stroke="#f4f1f6"/>
+    </g>
+  </g>
+</svg>

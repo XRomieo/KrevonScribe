@@ -13,6 +13,8 @@ from resolve_subtitle_tool import config  # noqa: E402
 def isolated(tmp_path, monkeypatch):
     """Point config and Kaggle credentials at a temp dir, never the real home."""
     monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "settings.json")
+    # Without this the pre-rename fallback would read the real user's file.
+    monkeypatch.setattr(config, "LEGACY_CONFIG_PATH", tmp_path / "legacy" / "settings.json")
     monkeypatch.setenv("KAGGLE_CONFIG_DIR", str(tmp_path / "kaggle"))
     monkeypatch.delenv("KAGGLE_API_TOKEN", raising=False)
     return tmp_path
@@ -46,6 +48,33 @@ class TestSettings:
             json.dumps({"font_en": "Futura", "removed_option": 1}), encoding="utf-8"
         )
         assert config.load().font_en == "Futura"
+
+    def test_settings_from_the_old_app_name_are_still_read(self, isolated):
+        # Upgrading to the Krevon Scribe name must not reset someone's setup.
+        config.LEGACY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        config.LEGACY_CONFIG_PATH.write_text(
+            json.dumps({"kaggle_username": "olduser", "font_en": "Futura"}),
+            encoding="utf-8",
+        )
+        loaded = config.load()
+        assert loaded.kaggle_username == "olduser"
+        assert loaded.font_en == "Futura"
+
+    def test_the_new_location_wins_over_the_old_one(self, isolated):
+        config.LEGACY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        config.LEGACY_CONFIG_PATH.write_text(
+            json.dumps({"kaggle_username": "olduser"}), encoding="utf-8"
+        )
+        config.save(config.Settings(kaggle_username="newuser"))
+        assert config.load().kaggle_username == "newuser"
+
+    def test_a_corrupt_new_file_still_falls_back_to_the_old_one(self, isolated):
+        config.CONFIG_PATH.write_text("{not json", encoding="utf-8")
+        config.LEGACY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        config.LEGACY_CONFIG_PATH.write_text(
+            json.dumps({"kaggle_username": "olduser"}), encoding="utf-8"
+        )
+        assert config.load().kaggle_username == "olduser"
 
     def test_save_is_atomic_leaving_no_temp_file(self, isolated):
         config.save(config.Settings())

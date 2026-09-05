@@ -13,6 +13,10 @@ from .config import Settings
 
 Progress = Callable[[str], None]
 
+# How many cues travel back to the UI for the preview. Enough to scroll through
+# and judge the result; a feature-length timeline is not worth serialising whole.
+PREVIEW_LIMIT = 400
+
 
 @dataclass
 class RunOutcome:
@@ -28,6 +32,14 @@ class RunOutcome:
     manual_srt: str | None
     manual_track_index: int | None
     detected_language: str
+    # The first cues themselves, so the UI can show what was actually written
+    # rather than only how many. Each is {"start", "end", "text"}.
+    preview: list[dict] = field(default_factory=list)
+    preview_truncated: bool = False
+    # The one step the tool cannot do itself: Resolve exposes no font API, so
+    # the typeface has to be set by hand in the Inspector. Kept separate from
+    # ``warnings`` because it is an instruction, not something that went wrong.
+    font_hint: str = ""
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -128,7 +140,11 @@ def run(
         en_cues=len(english), ar_cues=len(arabic), combined_cues=len(combined),
         placed_language=None, placed_cues=0,
         manual_srt=None, manual_track_index=None,
-        detected_language=detected, warnings=warnings,
+        detected_language=detected,
+        preview=[{"start": c.start, "end": c.end, "text": c.text}
+                 for c in combined[:PREVIEW_LIMIT]],
+        preview_truncated=len(combined) > PREVIEW_LIMIT,
+        warnings=warnings,
     )
 
     # ---- 4. back into Resolve --------------------------------------------
@@ -162,10 +178,10 @@ def run(
             except resolve_bridge.ResolveError as exc:
                 warnings.append(f"Could not place the subtitles: {exc}")
                 say(f"! {exc}")
-        warnings.append(
-            f"One track carries both languages, so it carries one font: choose one "
-            f"that covers Arabic and Latin (for example {settings.font_ar}). "
-            f"Resolve exposes no font API, so set it in the Inspector."
+        outcome.font_hint = (
+            f"One track carries both languages, so it carries one font. Select the "
+            f"subtitle track in Resolve and set the Inspector font to one that covers "
+            f"Arabic and Latin — {settings.font_ar}."
         )
         return outcome
 
@@ -204,7 +220,7 @@ def run(
         except resolve_bridge.ResolveError as exc:
             warnings.append(f"Could not stage the {secondary.upper()} subtitles: {exc}")
 
-    warnings.append(
+    outcome.font_hint = (
         f"Set the fonts by hand in the Inspector — {settings.font_en} for English, "
         f"{settings.font_ar} for Arabic. Resolve exposes no font API."
     )

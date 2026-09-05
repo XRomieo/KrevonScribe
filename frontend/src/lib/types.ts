@@ -1,3 +1,4 @@
+/** Mirrors resolve_subtitle_tool/config.py Settings. */
 export type Settings = {
   audio_dir: string
   srt_dir: string
@@ -5,9 +6,18 @@ export type Settings = {
   font_ar: string
   kaggle_username: string
   whisper_model: string
+  whisper_detect_model: string
+  code_switch_method: string
+  code_switch_model: string
+  cue_script_policy: string
   whisper_language: string
   arabic_threshold: number
   primary_language: string
+  single_track: boolean
+  forced_alignment: boolean
+  replace_existing_subtitles: boolean
+  backend: string
+  speechmatics_api_key: string
 }
 
 export type AudioTrack = {
@@ -41,17 +51,24 @@ export type KaggleStatus = {
   configured: boolean
 }
 
+export type PreviewCue = { start: number; end: number; text: string }
+
 export type RunOutcome = {
   audio_path: string
+  combined_srt: string
   en_srt: string
   ar_srt: string
   en_cues: number
   ar_cues: number
+  combined_cues: number
   placed_language: string | null
   placed_cues: number
   manual_srt: string | null
   manual_track_index: number | null
   detected_language: string
+  preview: PreviewCue[]
+  preview_truncated: boolean
+  font_hint: string
   warnings: string[]
 }
 

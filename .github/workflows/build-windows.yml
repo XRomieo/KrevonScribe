@@ -36,9 +36,9 @@ jobs:
       - name: Verify the bundle looks right
         shell: pwsh
         run: |
-          $exe = "dist/ResolveSubtitles/ResolveSubtitles.exe"
+          $exe = "dist/KrevonScribe/KrevonScribe.exe"
           if (-not (Test-Path $exe)) { throw "missing $exe" }
-          $index = "dist/ResolveSubtitles/_internal/frontend_dist/index.html"
+          $index = "dist/KrevonScribe/_internal/frontend_dist/index.html"
           if (-not (Test-Path $index)) { throw "frontend was not bundled ($index)" }
           Write-Host "OK: $((Get-Item $exe).Length) bytes"
 
@@ -50,7 +50,7 @@ jobs:
       - name: Run the frozen self-test
         shell: pwsh
         run: |
-          $exe = "dist/ResolveSubtitles/ResolveSubtitles.exe"
+          $exe = "dist/KrevonScribe/KrevonScribe.exe"
           $report = "selftest.txt"
           $p = Start-Process -FilePath $exe `
                              -ArgumentList "--selftest","--selftest-out",$report `
@@ -61,18 +61,18 @@ jobs:
       - name: Stage portable folder
         shell: pwsh
         run: |
-          Copy-Item README.md dist/ResolveSubtitles/ -ErrorAction SilentlyContinue
-          Compress-Archive -Path dist/ResolveSubtitles/* `
-                           -DestinationPath ResolveSubtitles-windows-portable.zip -Force
+          Copy-Item README.md dist/KrevonScribe/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist/KrevonScribe/* `
+                           -DestinationPath KrevonScribe-windows-portable.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ResolveSubtitles-windows-portable
-          path: ResolveSubtitles-windows-portable.zip
+          name: KrevonScribe-windows-portable
+          path: KrevonScribe-windows-portable.zip
           if-no-files-found: error
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ResolveSubtitles-windows-portable.zip
+          files: KrevonScribe-windows-portable.zip

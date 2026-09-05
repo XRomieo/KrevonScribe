@@ -14,18 +14,28 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-APP_NAME = "ResolveSubtitleTool"
+APP_NAME = "Krevon Scribe"
+# The name the app shipped under before it was branded. Settings saved by those
+# builds are still read, so an upgrade does not silently lose a user's Kaggle
+# username and output folders.
+LEGACY_APP_NAME = "ResolveSubtitleTool"
+
+
+def _config_root() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 
 
 def config_dir() -> Path:
     """Per-user configuration directory for this app."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return base / APP_NAME
+    return _config_root() / APP_NAME
+
+
+def legacy_config_dir() -> Path:
+    return _config_root() / LEGACY_APP_NAME
 
 
 def default_output_dir() -> Path:
@@ -33,6 +43,7 @@ def default_output_dir() -> Path:
 
 
 CONFIG_PATH = config_dir() / "settings.json"
+LEGACY_CONFIG_PATH = legacy_config_dir() / "settings.json"
 
 
 @dataclass
@@ -98,15 +109,21 @@ class Settings:
 
 
 def load() -> Settings:
-    """Read settings, ignoring unknown or corrupt content rather than failing."""
-    try:
-        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return Settings()
-    if not isinstance(raw, dict):
-        return Settings()
-    known = {f.name for f in fields(Settings)}
-    return Settings(**{k: v for k, v in raw.items() if k in known})
+    """Read settings, ignoring unknown or corrupt content rather than failing.
+
+    Falls back to the pre-rename location so upgrading does not reset the app.
+    The old file is left alone; the next save writes to the new path.
+    """
+    for path in (CONFIG_PATH, LEGACY_CONFIG_PATH):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        known = {f.name for f in fields(Settings)}
+        return Settings(**{k: v for k, v in raw.items() if k in known})
+    return Settings()
 
 
 def save(settings: Settings) -> Path:

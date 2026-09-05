@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Krevon">
+  <title>Krevon</title>
+  <g fill="none" stroke-linecap="round" stroke-width="8.5">
+    <path d="M16.5 15V49" stroke="#f4f1f6"/>
+    <path d="M28.5 31L45 16.5" stroke="#ff4d6d"/>
+    <path d="M28.5 33L45 47.5" stroke="#f4f1f6"/>
+  </g>
+</svg>

@@ -47,7 +47,7 @@ def build_bundle() -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Build ResolveSubtitles.")
+    ap = argparse.ArgumentParser(description="Build Krevon Scribe.")
     ap.add_argument("--frontend-only", action="store_true")
     ap.add_argument("--skip-install", action="store_true",
                     help="Reuse the existing node_modules instead of running bun install.")

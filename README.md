@@ -1,8 +1,7 @@
-# Resolve EN/AR Subtitle Tool
+# Krevon Scribe
 
-Pulls audio out of a DaVinci Resolve timeline, transcribes it on a free Kaggle
-GPU with faster-whisper, splits the result into English and Arabic subtitle
-files, and imports them back into Resolve.
+Pulls audio out of a DaVinci Resolve timeline, transcribes English and Arabic
+together on a free Kaggle GPU, and puts the subtitles back on the timeline.
 
 Runs on macOS and Windows. The Windows build is a portable folder — no
 installer, no admin rights, no Python needed.
@@ -25,8 +24,8 @@ reference returns zero matches, `TimelineItem.SetProperty` accepts only
 transform and composite keys, and all 157 project and timeline settings contain
 nothing about typefaces. The planned
 `SetTrackSettings("subtitle", i, {"font": ...})` does not exist in any form.
-Fonts are set by hand, once per subtitle track, in the Inspector. The app stores
-your two font names and reminds you which to apply.
+The font is set by hand, once, in the Inspector. The app names the one you
+picked when the run finishes.
 
 ---
 
@@ -37,12 +36,11 @@ compromise, it is the only arrangement that works: Resolve displays a single
 subtitle track at a time, and it routes every programmatic append to the
 already-populated track, so a second track could never be filled automatically
 anyway. One track also means one font — pick one that covers Arabic and Latin
-(Geeza Pro, Noto Sans Arabic) and set it in the Inspector, because Resolve
-exposes no font API.
+(Geeza Pro, Noto Sans Arabic) and set it in the Inspector.
 
-Set `single_track = false` to get the old behaviour instead: the primary
-language placed automatically and the second staged in the Media Pool for you to
-drag onto its own track.
+Set `single_track = false` in `settings.json` to get the old behaviour instead:
+the primary language placed automatically and the second staged in the Media
+Pool for you to drag onto its own track.
 
 ## Choosing a transcription backend
 
@@ -66,18 +64,18 @@ measured in [docs/TRANSCRIPTION_FINDINGS.md](docs/TRANSCRIPTION_FINDINGS.md)
 against language spans marked by hand in Resolve.
 
 No cue holds both scripts: the speaker switches language inside a sentence, and
-one track carries one font. Set `cue_script_policy = "mixed"` to keep such a
-sentence whole instead, at the cost of cues that mix Arabic and Latin.
+one track carries one font. Turn off **Never mix scripts in one cue** in Settings
+to keep such a sentence whole instead.
 
-Set `code_switch_method = "confidence"` to fall back to the older route (stock
-whisper run four times, language inferred from decoder confidence). It scores
-65–78% against the same spans and varies between runs, so it is only worth
-reaching for if Hugging Face is unreachable.
+Set `code_switch_method = "confidence"` in `settings.json` to fall back to the
+older route (stock whisper run four times, language inferred from decoder
+confidence). It scores 65–78% against the same spans and varies between runs, so
+it is only worth reaching for if Hugging Face is unreachable.
 
-`speechmatics` is the paid alternative, and needs less machinery still, because Melia
-tags every word with the language it was spoken in — the split becomes a lookup
-rather than an inference. It has not been run against real audio yet: the code and its
-tests exist, but nobody has supplied an API key.
+`speechmatics` is the paid alternative, and needs less machinery still, because
+Melia tags every word with the language it was spoken in — the split becomes a
+lookup rather than an inference. It has not been run against real audio yet: the
+code and its tests exist, but nobody has supplied an API key.
 
 ## Requirements
 
@@ -95,9 +93,9 @@ downloads are needed locally.
 
 ### Windows — portable
 
-Download `ResolveSubtitles-windows-portable.zip` from the Releases page, unzip
-anywhere, and run `ResolveSubtitles.exe`. WebView2, which the UI renders in,
-ships with Windows 10 and 11.
+Download `KrevonScribe-windows-portable.zip` from the Releases page, unzip
+anywhere, and run `KrevonScribe.exe`. WebView2, which the UI renders in, ships
+with Windows 10 and 11.
 
 ### macOS — from source
 
@@ -109,13 +107,13 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 To produce a `.app` bundle instead, install `requirements-dev.txt` and run
-`python scripts/build.py`, which writes `dist/ResolveSubtitles.app`. It is
-unsigned, so first launch needs right-click → Open.
+`python scripts/build.py`, which writes `dist/KrevonScribe.app`. It is unsigned,
+so first launch needs right-click → Open.
 
 ### Checking a build
 
 ```bash
-python app.py --selftest          # or: ResolveSubtitles.exe --selftest
+python app.py --selftest          # or: KrevonScribe.exe --selftest
 ```
 
 Imports what the app imports and exercises the cue logic end to end, without
@@ -136,58 +134,56 @@ Windows; that workflow is the only supported way to produce it.
 
 ## Using it
 
-1. Open your timeline in Resolve, then start the app. The top rail should read
-   **Connected** with your project, timeline and frame rate.
-2. Arm the audio tracks to transcribe. Unarmed tracks are muted for the render
-   and restored afterwards.
-3. Add your Kaggle credentials once, under **Kaggle**.
-4. Choose which language gets auto-placed, and set the Arabic threshold — the
-   share of a cue's letters that must be Arabic script for it to route to the
-   Arabic track. 50% means the majority script wins, so an English sentence
-   containing one Arabic word stays on the English track. 0% sends any cue
-   containing Arabic to the Arabic track.
-5. Press **Transcribe**. Expect several minutes: upload, queue, model load, then
-   transcription.
-6. Finish the two manual steps described above.
+1. Open your timeline in Resolve, then start the app. The top bar should read
+   **Resolve connected** and the page should name your timeline.
+2. Tick the audio tracks to transcribe. Unticked tracks are muted for the render
+   and switched back on afterwards.
+3. Add your Kaggle token once, under the settings button. The app offers this as
+   the first thing it asks for.
+4. Press **Make subtitles**. Expect several minutes: render, upload, GPU queue,
+   transcription, alignment. The page shows which stage it is on and how long
+   each one took; the raw log is one click away.
+5. When it finishes you see the actual cues, each in its own script and
+   direction, and the one manual step left: set the subtitle track's font in the
+   Inspector.
 
-**Audio file mode** transcribes a file from disk and writes both SRTs, but does
-not import them, because the cue times are relative to that file rather than to
-a timeline.
+**File mode** transcribes a file from disk and writes the subtitle files, but
+does not import them, because the cue times are relative to that file rather
+than to a timeline.
+
+If a run fails with *"Subtitle track(s) [1] already contain cues"*, the page
+offers to clear those tracks and run again. Resolve sends every scripted import
+to the track that already holds cues, so a second run cannot place anything
+until they are cleared.
 
 ---
 
 ## How cues are routed
 
-Whisper picks **one** language for an entire file, from its opening window. On a
-bilingual timeline that is not a small inaccuracy: the losing language is
-*translated* into the winning one's script rather than transcribed, so every cue
-ends up on a single track and the tool does nothing useful. Measured on a real
-27-second EN/AR clip, global auto-detect returned Arabic at p=0.89 and rendered
-the English narration as Arabic text.
+Stock Whisper picks **one** language for an entire file, from its opening
+window. On a bilingual timeline that is not a small inaccuracy: the losing
+language is *translated* into the winning one's script rather than transcribed.
+Measured on a real 27-second EN/AR clip, global auto-detect returned Arabic at
+p=0.89 and rendered the English narration as Arabic text.
 
-So the kernel segments by language first. It runs detection over overlapping
-4-second windows, accumulates each window's probabilities into 1-second slots
-weighted toward the window centre, and forces the winning language per span when
-transcribing. Two details carry their weight:
+The default route sidesteps that entirely. A checkpoint fine-tuned on
+code-switched Arabic/English writes each word in the script it was spoken in,
+so the language is **read off the transcript** instead of inferred:
 
-- **Centre weighting**, because a flat vote across the window dilates every
-  boundary by half a window and decodes the tail of an English sentence as
-  Arabic.
-- **Accumulating probabilities rather than median-filtering labels**, because a
-  median filter erases a real switch that happens to be one slot wide — which is
-  exactly what a short Arabic line between two English ones looks like.
+- Words are grouped into runs by script. A short run is absorbed into its
+  neighbours only when the *same* language sits on both sides of it — otherwise
+  a genuine 0.71 s Arabic ending gets erased for being short.
+- At a switch the model sometimes fuses the last word of one language and the
+  first of the next into one token (` secret؟هيكون`). Those are split at the
+  script boundary and their time apportioned by character count.
+- Arabic punctuation after an English word (`Why؟`) is corrected per mark, from
+  the nearest preceding letter, because a cue may legitimately hold both.
+- Cue text is then re-timed against the audio by a CTC forced aligner. Whisper
+  infers its timestamps rather than measuring them; alignment took the median
+  correction from 0.306 s to 0.065 s and the worst case from 2.526 s to 0.320 s.
 
-Spans are decoded with two seconds of neighbouring audio for context and
-segments whose midpoint falls outside the span are dropped. Whisper is markedly
-worse on a bare two-second island than on the same words in context.
-
-Only the candidate languages you configure are considered. Unrestricted
-detection wanders off to Spanish or Tagalog on accented or noisy windows.
-
-Routing to tracks then works on the text itself: the tool counts letters in
-Arabic Unicode blocks against total letters, ignoring digits, punctuation and
-whitespace, and compares the ratio to your threshold. Once each span is
-transcribed in its own language, script and language agree.
+Every number above is scored against language spans marked by hand in Resolve
+and kept as `tests/fixtures/codeswitch_ground_truth.json`.
 
 The honest limit: a subtitle track carries one font, so an English sentence with
 an Arabic word inline renders entirely in one track's typeface. True per-word
@@ -201,26 +197,35 @@ much heavier approach and is not what this builds.
 ```
 app.py                     entry point
 app.spec                   PyInstaller bundle definition
+assets/                    the Krevon mark, and the .icns / .ico built from it
 resolve_subtitle_tool/
   main.py                  opens the pywebview window
   api_bridge.py            the js_api object exposed to the frontend
   pipeline.py              audio -> Kaggle -> SRTs -> Resolve
   resolve_bridge.py        Resolve: tracks, audio render, SRT import
   kaggle_runner.py         Kaggle: dataset, kernel, polling, download
+  speechmatics_runner.py   the paid alternative backend
   subtitle_utils.py        cue model, Arabic routing, SRT writing
   config.py                persisted settings and credentials
   kaggle_kernel/
     transcribe_kernel.py   runs on Kaggle, not locally
-frontend/                  React + Tailwind + shadcn/ui, rendered in pywebview
+frontend/                  React + Tailwind, rendered in pywebview
+  src/lib/stages.ts        maps the backend's log lines onto run stages
 scripts/
   build.py                 frontend + bundle build
+  make_icons.py            SVG -> .icns / .ico (macOS only; results committed)
   probe_*.py               the Resolve API experiments behind the findings doc
-tests/                     64 tests, no Resolve or network needed
+tests/                     190 tests, no Resolve or network needed
 docs/RESOLVE_API_FINDINGS.md
+docs/TRANSCRIPTION_FINDINGS.md
 ```
 
 `subtitle_utils.py` is dependency-free and holds the routing logic, so the test
 suite runs anywhere without Resolve, a GPU, or network access.
+
+Settings live in the platform's per-user config directory, under
+`Krevon Scribe`. Settings written by the earlier `ResolveSubtitleTool` builds
+are still read, so upgrading does not reset your setup.
 
 ---
 
@@ -231,11 +236,13 @@ Resolve and set Preferences → System → General → *External scripting using
 **Local**.
 
 **"Subtitle track(s) [1] already contain cues"** — Resolve would send the import
-to that track and corrupt its timing. Clear or delete those subtitle tracks
-first. The tool refuses rather than damage existing work.
+to that track and corrupt its timing. Use the **Clear those tracks and run
+again** button the failure offers, or turn on *Clear subtitle tracks before
+importing* in Settings. The tool refuses by default rather than damage existing
+work.
 
-**The window opens but stays on "Connecting…"** — the app retries the startup
-handshake and then shows the actual error with a Retry button. If it names
+**The window opens but stays on "Starting up…"** — the app retries the startup
+handshake and then shows the actual error with a Try again button. If it names
 Resolve, check the scripting preference above.
 
 **The Kaggle kernel fails** — the log links the kernel page; its output shows

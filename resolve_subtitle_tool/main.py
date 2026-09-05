@@ -9,7 +9,7 @@ from pathlib import Path
 # this module must stay importable without one so --selftest and the test suite
 # can reach it on a machine that has neither.
 
-WINDOW_TITLE = "Resolve EN/AR Subtitles"
+WINDOW_TITLE = "Krevon Scribe"
 
 
 def frontend_index() -> Path:
@@ -122,9 +122,10 @@ def main() -> None:
         WINDOW_TITLE,
         str(frontend_index()),
         js_api=api,
-        width=1080,
-        height=780,
-        min_size=(880, 620),
+        width=940,
+        height=820,
+        min_size=(720, 640),
+        background_color="#0f0e13",
     )
     api.window = window
     # debug=True opens the inspector; keep it off for released builds.

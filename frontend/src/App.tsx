@@ -1,31 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AudioLines, FileAudio, KeyRound, Loader2, Play, Type } from "lucide-react"
+import { KeyRound, Sparkles } from "lucide-react"
 
-import { StatusRail } from "@/components/StatusRail"
-import { ChannelStrip } from "@/components/ChannelStrip"
-import { Console, type LogLine } from "@/components/Console"
-import { ResultPanel } from "@/components/ResultPanel"
-import { KaggleDialog } from "@/components/KaggleDialog"
-import { Segmented } from "@/components/Segmented"
-import { PathRow } from "@/components/PathRow"
-import { Section, Field } from "@/components/Section"
-import { Input } from "@/components/ui/input"
-import { Slider } from "@/components/ui/slider"
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select"
+import { TopBar } from "@/components/TopBar"
+import { AudioStep } from "@/components/AudioStep"
+import { RunSpine, type LogLine } from "@/components/RunSpine"
+import { ResultView } from "@/components/ResultView"
+import { SettingsSheet } from "@/components/SettingsSheet"
+import { Mark } from "@/components/Mark"
 import { Switch } from "@/components/ui/switch"
 
 import { api, callWithRetry, onAppEvent, ready } from "@/lib/api"
+import { furthest, stageOf, type StageId } from "@/lib/stages"
 import type { Bootstrap, KaggleStatus, Res, RunOutcome, Settings, TimelineInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const MODELS = ["large-v3", "large-v2", "medium", "small", "base"]
-const LANGUAGES = [
-  { value: "auto", label: "Auto-detect" },
-  { value: "ar", label: "Arabic" },
-  { value: "en", label: "English" },
-]
+function timecode(frames: number, fps: number) {
+  const f = Math.max(0, Math.round(frames))
+  const r = Math.max(1, Math.round(fps))
+  const p = (n: number) => String(n).padStart(2, "0")
+  return `${p(Math.floor(f / (r * 3600)))}:${p(Math.floor(f / (r * 60)) % 60)}:${p(Math.floor(f / r) % 60)}`
+}
 
 export default function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null)
@@ -33,6 +27,8 @@ export default function App() {
   const [kaggle, setKaggle] = useState<KaggleStatus | null>(null)
   const [resolveState, setResolveState] = useState<Res<{ info: TimelineInfo }> | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [fatal, setFatal] = useState("")
 
   const [source, setSource] = useState<"timeline" | "file">("timeline")
   const [audioFile, setAudioFile] = useState<string | null>(null)
@@ -42,8 +38,10 @@ export default function App() {
   const [logs, setLogs] = useState<LogLine[]>([])
   const [running, setRunning] = useState(false)
   const [outcome, setOutcome] = useState<RunOutcome | null>(null)
-  const [showKaggle, setShowKaggle] = useState(false)
-  const [fatal, setFatal] = useState("")
+  const [runError, setRunError] = useState<string | null>(null)
+  const [stage, setStage] = useState<StageId | null>(null)
+  const [enteredAt, setEnteredAt] = useState<Partial<Record<StageId, number>>>({})
+  const [startedAt, setStartedAt] = useState(() => Date.now())
 
   const logId = useRef(0)
   const info = resolveState?.ok ? resolveState.info : null
@@ -59,7 +57,7 @@ export default function App() {
   // -- bootstrap ---------------------------------------------------------
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
+    void (async () => {
       await ready()
       let res: Awaited<ReturnType<typeof api.get_bootstrap>>
       try {
@@ -87,10 +85,24 @@ export default function App() {
   useEffect(
     () =>
       onAppEvent((e) => {
-        if (e.event === "log") addLog(e.payload.message)
-        else if (e.event === "run_started") { setRunning(true); setOutcome(null) }
-        else if (e.event === "run_finished") { setRunning(false); setOutcome(e.payload) }
-        else if (e.event === "run_failed") { setRunning(false); addLog(e.payload.error, "warn") }
+        if (e.event === "log") {
+          addLog(e.payload.message)
+          const next = stageOf(e.payload.message)
+          setStage((current) => {
+            const moved = furthest(current, next)
+            if (moved && moved !== current) {
+              setEnteredAt((prev) => (prev[moved] ? prev : { ...prev, [moved]: Date.now() }))
+            }
+            return moved
+          })
+        } else if (e.event === "run_finished") {
+          setRunning(false)
+          setOutcome(e.payload)
+        } else if (e.event === "run_failed") {
+          setRunning(false)
+          setRunError(e.payload.error)
+          addLog(e.payload.error, "warn")
+        }
       }),
     [addLog],
   )
@@ -126,320 +138,271 @@ export default function App() {
 
   const reveal = useCallback((p: string) => { void api.reveal(p) }, [])
 
-  async function browse(which: "audio_dir" | "srt_dir") {
-    const res = await api.choose_folder(settings?.[which] ?? "")
-    if (res.ok && res.path) patch({ [which]: res.path } as Partial<Settings>)
-  }
+  const toggleArm = useCallback((index: number) => {
+    setArmed((prev) => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }, [])
 
   async function pickAudio() {
     const res = await api.choose_audio_file("")
     if (res.ok && res.path) setAudioFile(res.path)
   }
 
-  const blocker = useMemo(() => {
-    if (running) return "Run in progress"
-    if (!kaggle?.configured) return "Add Kaggle credentials"
-    if (!settings?.kaggle_username) return "Kaggle username missing"
+  // `blocker` gates the button; `blockerNote` is what to say about it. They
+  // differ when the page has already explained the problem twice over — a
+  // missing Resolve is stated in the heading and again where the tracks go.
+  const [blocker, blockerNote] = useMemo<[string | null, string | null]>(() => {
     if (source === "timeline") {
-      if (!info) return "Resolve not connected"
-      if (!info.has_content) return "Timeline is empty"
-      if (armed.size === 0) return "Arm at least one audio track"
-    } else if (!audioFile) return "Choose an audio file"
-    return null
-  }, [running, kaggle, settings, source, info, armed, audioFile])
+      if (!info) return ["resolve", null]
+      if (!info.has_content) return ["empty", "This timeline is empty."]
+      if (armed.size === 0) return ["tracks", "Tick at least one audio track."]
+    } else if (!audioFile) {
+      return ["file", "Choose an audio file."]
+    }
+    return [null, null]
+  }, [source, info, armed, audioFile])
+
+  // Resolve refuses to import onto a populated subtitle track; clearing them
+  // first is the fix, and it is a setting the user has probably never seen.
+  const occupiedTracks = !!runError && /already contain cues/i.test(runError)
+
+  function reset() {
+    setLogs([]); setOutcome(null); setRunError(null)
+    setStage(null); setEnteredAt({})
+  }
 
   async function start() {
     if (blocker) return
-    setLogs([]); setOutcome(null); setRunning(true)
+    reset()
+    const now = Date.now()
+    setStartedAt(now)
+    setStage("render")
+    setEnteredAt({ render: now })
+    setRunning(true)
     const res = await api.start_run({
       audio_source: source,
       track_indices: [...armed].sort((a, b) => a - b),
       audio_file: audioFile,
       import_to_resolve: importToResolve,
     })
-    if (!res.ok) { setRunning(false); addLog(res.error, "warn") }
+    if (!res.ok) { setRunning(false); setRunError(res.error); addLog(res.error, "warn") }
   }
 
   if (fatal) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-10 text-center">
-        <p className="label-etched text-alert">Could not start</p>
-        <p className="max-w-md font-mono text-[12px] leading-relaxed text-ink-dim">{fatal}</p>
+      <Centered>
+        <Mark size={30} />
+        <p className="mt-5 font-display text-[19px] text-ink">Krevon Scribe could not start</p>
+        <p className="mt-2 max-w-sm font-mono text-[12px] leading-relaxed text-ink-3">{fatal}</p>
         <button
+          type="button"
           onClick={() => window.location.reload()}
-          className="mt-1 rounded-md border border-line bg-panel-raised px-3 py-1.5 text-[11.5px] text-ink-dim transition-colors hover:border-line-bright hover:text-ink"
+          className="mt-5 rounded-lg border border-edge px-3.5 py-2 text-[12.5px] text-ink-2 transition-colors hover:border-edge-lit hover:text-ink"
         >
-          Retry
+          Try again
         </button>
-      </div>
+      </Centered>
     )
   }
 
   if (!boot || !settings) {
     return (
-      <div className="flex h-full items-center justify-center gap-2.5 text-ink-faint">
-        <Loader2 className="size-4 animate-spin" />
-        <span className="font-mono text-[12px]">Connecting…</span>
-      </div>
+      <Centered>
+        <Mark size={30} className="animate-breathe" />
+        <p className="mt-4 text-[12.5px] text-ink-3">Starting up…</p>
+      </Centered>
     )
   }
 
+  const needsKaggle = !kaggle?.configured
+  const view = outcome ? "done" : (running || runError) ? "run" : "ready"
+
   return (
     <div className="relative z-10 flex h-full flex-col">
-      <StatusRail state={resolveState} onRefresh={refresh} busy={refreshing} />
+      <TopBar
+        connected={!!resolveState?.ok}
+        busy={refreshing}
+        onRefresh={() => void refresh()}
+        onSettings={() => setShowSettings(true)}
+        needsSetup={needsKaggle}
+      />
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(340px,400px)_1fr]">
-        {/* ------------------------------ configuration ------------------ */}
-        <div className="min-h-0 divide-y divide-line overflow-y-auto border-r border-line">
-          <Section label="Source">
-            <Segmented
-              value={source}
-              onChange={setSource}
-              options={[
-                { value: "timeline", label: "Timeline tracks" },
-                { value: "file", label: "Audio file" },
-              ]}
-              tone="neutral"
-            />
-
-            {source === "timeline" ? (
-              <div className="mt-3 space-y-1.5">
-                {info ? (
-                  info.audio_tracks.length ? (
-                    info.audio_tracks.map((t) => (
-                      <ChannelStrip
-                        key={t.index}
-                        track={t}
-                        armed={armed.has(t.index)}
-                        onToggle={() =>
-                          setArmed((prev) => {
-                            const next = new Set(prev)
-                            next.has(t.index) ? next.delete(t.index) : next.add(t.index)
-                            return next
-                          })
-                        }
-                      />
-                    ))
-                  ) : (
-                    <p className="py-3 text-center text-[11.5px] text-ink-faint">
-                      This timeline has no audio tracks.
-                    </p>
-                  )
-                ) : (
-                  <p className="rounded-md border border-line bg-panel-inset px-3 py-3 text-[11.5px] leading-relaxed text-ink-faint">
-                    Open a timeline in DaVinci Resolve, then press Refresh.
+      {/* my-auto centres a short view without clipping a tall one, which is
+          what `items-center` would do once the content overflows. */}
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="mx-auto my-auto w-full max-w-[600px] px-7 py-9">
+          {view === "ready" && (
+            <div className="animate-rise">
+              {source === "file" ? (
+                // The open timeline is irrelevant here, and naming it above a
+                // file picker suggests a connection that does not exist.
+                <div className="mb-7">
+                  <h1 className="font-display text-[26px] leading-tight text-ink">
+                    Transcribe a file
+                  </h1>
+                  <p className="mt-1.5 text-[12.5px] text-ink-3">
+                    Subtitles are written next to your other exports.
                   </p>
-                )}
-                {info && info.audio_tracks.length > 0 && (
-                  <p className="pt-1 text-[10.5px] leading-relaxed text-ink-faint">
-                    Armed tracks are mixed to one WAV. The rest are muted for the render and
-                    restored afterwards.
+                </div>
+              ) : info ? (
+                <div className="mb-7">
+                  <h1 className="font-display text-[26px] leading-tight text-ink">
+                    {info.timeline}
+                  </h1>
+                  <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-3">
+                    <span>{info.project}</span>
+                    <Dot />
+                    <span className="tnum">{info.fps.toFixed(2)} fps</span>
+                    <Dot />
+                    <span className="tnum">{timecode(info.end_frame - info.start_frame, info.fps)}</span>
                   </p>
-                )}
-              </div>
-            ) : (
-              <div className="mt-3 space-y-2">
-                <button
-                  onClick={pickAudio}
-                  className="flex w-full items-center gap-2.5 rounded-md border border-line bg-panel-inset px-3 py-2.5 text-left transition-colors hover:border-line-bright"
-                >
-                  <FileAudio className="size-4 shrink-0 text-ink-faint" />
-                  <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink-dim">
-                    {audioFile ? audioFile.split("/").pop() : "Choose an audio file…"}
-                  </span>
-                </button>
-                <p className="text-[10.5px] leading-relaxed text-ink-faint">
-                  File mode writes SRTs but does not import them, since the cue times are
-                  relative to the file rather than to a timeline.
-                </p>
-              </div>
-            )}
-          </Section>
+                </div>
+              ) : (
+                <div className="mb-7">
+                  <h1 className="font-display text-[26px] leading-tight text-ink">
+                    Waiting for Resolve
+                  </h1>
+                  <p className="mt-1.5 max-w-[46ch] text-[12.5px] leading-relaxed text-ink-3">
+                    {resolveState && !resolveState.ok
+                      ? resolveState.error
+                      : "Open a project and a timeline, then press refresh."}
+                  </p>
+                </div>
+              )}
 
-          <Section label="Transcription">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Model">
-                <Select value={settings.whisper_model} onValueChange={(v) => patch({ whisper_model: v })}>
-                  <SelectTrigger className="w-full font-mono text-[11.5px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MODELS.map((m) => (
-                      <SelectItem key={m} value={m} className="font-mono text-[11.5px]">{m}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Spoken language">
-                <Select value={settings.whisper_language} onValueChange={(v) => patch({ whisper_language: v })}>
-                  <SelectTrigger className="w-full text-[11.5px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {LANGUAGES.map((l) => (
-                      <SelectItem key={l.value} value={l.value} className="text-[11.5px]">{l.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            </div>
-            <p className="mt-2.5 text-[10.5px] leading-relaxed text-ink-faint">
-              Runs on a free Kaggle GPU. Whisper detects one language for the whole file, so
-              cues are routed to tracks by inspecting their script below.
-            </p>
-          </Section>
-
-          <Section label="Language routing">
-            <Field label={`Arabic threshold · ${Math.round(settings.arabic_threshold * 100)}%`}>
-              <Slider
-                value={[settings.arabic_threshold]}
-                onValueChange={([v]) => patch({ arabic_threshold: v })}
-                min={0} max={1} step={0.05}
-                className="py-1.5"
+              <AudioStep
+                source={source} onSource={setSource} info={info}
+                armed={armed} onArm={toggleArm}
+                audioFile={audioFile} onPickFile={() => void pickAudio()}
               />
-            </Field>
-            <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-faint">
-              {settings.arabic_threshold <= 0.01
-                ? "Any cue containing Arabic goes to the Arabic track."
-                : `A cue goes to the Arabic track when at least ${Math.round(settings.arabic_threshold * 100)}% of its letters are Arabic script. Digits and punctuation are ignored.`}
-            </p>
 
-            <div className="mt-3.5">
-              <Field label="Auto-place on timeline">
-                <Segmented
-                  value={settings.primary_language as "en" | "ar"}
-                  onChange={(v) => patch({ primary_language: v })}
-                  options={[{ value: "en", label: "English" }, { value: "ar", label: "Arabic" }]}
-                  tone={settings.primary_language === "ar" ? "ar" : "en"}
-                />
-              </Field>
-              <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-faint">
-                Only one language can be placed automatically. The other is imported to the
-                Media Pool with an empty track ready for it.
-              </p>
+              <div className="mt-7 border-t border-edge pt-6">
+                {needsKaggle ? (
+                  <>
+                    <PrimaryButton onClick={() => setShowSettings(true)}>
+                      <KeyRound className="size-4" />
+                      Connect Kaggle
+                    </PrimaryButton>
+                    <p className="mt-2.5 max-w-[52ch] text-[12px] leading-relaxed text-ink-3">
+                      Transcription runs on a free Kaggle GPU, so the app needs an API token
+                      once. It takes a minute.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <PrimaryButton onClick={() => void start()} disabled={!!blocker}>
+                      <Sparkles className="size-4" />
+                      Make subtitles
+                    </PrimaryButton>
+                    {(() => {
+                      const note = blocker
+                        ? blockerNote
+                        : "English and Arabic, on one subtitle track. Expect a few minutes."
+                      return note && <p className="mt-2.5 text-[12px] text-ink-3">{note}</p>
+                    })()}
+                  </>
+                )}
+
+                {source === "timeline" && (
+                  <label className="mt-5 flex cursor-pointer items-center gap-2.5">
+                    <Switch checked={importToResolve} onCheckedChange={setImportToResolve} />
+                    <span className="text-[12.5px] text-ink-2">Import into Resolve when done</span>
+                  </label>
+                )}
+              </div>
             </div>
-          </Section>
-
-          <Section label="Fonts">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="English">
-                <Input
-                  value={settings.font_en} onChange={(e) => patch({ font_en: e.target.value })}
-                  className="font-mono text-[11.5px]"
-                />
-              </Field>
-              <Field label="Arabic">
-                <Input
-                  value={settings.font_ar} onChange={(e) => patch({ font_ar: e.target.value })}
-                  className="font-mono text-[11.5px]"
-                />
-              </Field>
-            </div>
-            <p className="mt-2.5 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-ink-faint">
-              <Type className="mt-px size-3 shrink-0" />
-              <span>
-                Reminder only. Resolve exposes no font API, so these are set by hand on each
-                subtitle track in the Inspector.
-              </span>
-            </p>
-          </Section>
-
-          <Section label="Destinations">
-            <div className="space-y-3">
-              <Field label="Rendered audio"><PathRow value={settings.audio_dir} onBrowse={() => browse("audio_dir")} /></Field>
-              <Field label="Subtitles"><PathRow value={settings.srt_dir} onBrowse={() => browse("srt_dir")} /></Field>
-            </div>
-          </Section>
-
-          <Section
-            label="Kaggle"
-            action={
-              <button
-                onClick={() => setShowKaggle(true)}
-                className="flex items-center gap-1.5 rounded-md border border-line bg-panel-raised px-2 py-1 text-[10.5px] font-medium text-ink-dim transition-colors hover:border-line-bright hover:text-ink"
-              >
-                <KeyRound className="size-3" />
-                {kaggle?.configured ? "Change" : "Set up"}
-              </button>
-            }
-          >
-            <div className="flex items-center gap-2.5 rounded-md border border-line bg-panel-inset px-3 py-2.5">
-              <span className={cn("size-1.5 shrink-0 rounded-full", kaggle?.configured ? "bg-live" : "bg-alert")} />
-              <span className="min-w-0 flex-1 font-mono text-[11px] text-ink-dim">
-                {kaggle?.configured
-                  ? `${kaggle.username || settings.kaggle_username || "credentials saved"}`
-                  : "No credentials"}
-              </span>
-            </div>
-            {kaggle?.configured && !settings.kaggle_username && (
-              <Field label="Username">
-                <Input
-                  value={settings.kaggle_username}
-                  onChange={(e) => patch({ kaggle_username: e.target.value })}
-                  placeholder="needed to name the dataset"
-                  className="mt-2.5 font-mono text-[11.5px]"
-                />
-              </Field>
-            )}
-          </Section>
-        </div>
-
-        {/* ------------------------------ console + results -------------- */}
-        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto p-5">
-          <Console lines={logs} running={running} />
-          {outcome && <ResultPanel outcome={outcome} onReveal={reveal} />}
-        </div>
-      </div>
-
-      {/* ------------------------------ transport bar -------------------- */}
-      <footer className="flex items-center gap-4 border-t border-line bg-panel/85 px-5 py-3 backdrop-blur hairline-top">
-        <label className="flex cursor-pointer items-center gap-2.5">
-          <Switch
-            checked={importToResolve}
-            onCheckedChange={setImportToResolve}
-            disabled={source !== "timeline"}
-          />
-          <span className={cn("text-[11.5px]", source === "timeline" ? "text-ink-dim" : "text-ink-faint")}>
-            Import back into Resolve
-          </span>
-        </label>
-
-        <div className="ml-auto flex items-center gap-3">
-          {blocker && !running && (
-            <span className="font-mono text-[10.5px] text-ink-faint">{blocker}</span>
           )}
-          <button
-            onClick={start}
-            disabled={!!blocker}
-            className={cn(
-              "group relative flex items-center gap-2.5 overflow-hidden rounded-md px-5 py-2.5 text-[12.5px] font-semibold tracking-wide transition-all duration-150",
-              blocker
-                ? "cursor-not-allowed border border-line bg-panel-raised text-ink-faint"
-                : "bg-en text-[#1a1204] shadow-[0_0_22px_-6px_var(--en)] hover:brightness-110 active:scale-[0.985]",
-            )}
-          >
-            {running ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" />
-                Transcribing…
-                <span aria-hidden className="absolute inset-x-0 bottom-0 h-px overflow-hidden">
-                  <span className="absolute inset-y-0 w-1/3 bg-en animate-sweep" />
-                </span>
-              </>
-            ) : (
-              <>
-                <Play className="size-3.5 fill-current" />
-                Transcribe
-                <AudioLines className="size-3.5 opacity-60" />
-              </>
-            )}
-          </button>
-        </div>
-      </footer>
 
-      <KaggleDialog
-        open={showKaggle}
-        onOpenChange={setShowKaggle}
-        onSaved={(k, s) => { setKaggle(k); setSettings(s) }}
+          {view === "run" && (
+            <>
+              <RunSpine
+                stage={stage} enteredAt={enteredAt} startedAt={startedAt}
+                running={running} error={runError} logs={logs}
+                skip={source === "file" || !importToResolve ? ["place"] : []}
+              />
+              {!running && (
+                <div className="mt-7 flex flex-wrap items-center gap-2.5">
+                  {/* The commonest failure has exactly one fix, so offer it here
+                      rather than sending the user to hunt through settings. */}
+                  {occupiedTracks && (
+                    <button
+                      type="button"
+                      onClick={() => void (async () => {
+                        // Persist before starting: the debounced saver would
+                        // otherwise land after the run has already read it.
+                        patch({ replace_existing_subtitles: true })
+                        await api.save_settings({
+                          ...settings, replace_existing_subtitles: true,
+                        })
+                        await start()
+                      })()}
+                      className="rounded-lg bg-pulse px-3.5 py-2 text-[12.5px] font-semibold text-[#26060f] transition-[filter,transform] hover:brightness-110 active:scale-[0.985]"
+                    >
+                      Clear those tracks and run again
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={reset}
+                    className="rounded-lg border border-edge px-3.5 py-2 text-[12.5px] text-ink-2 transition-colors hover:border-edge-lit hover:text-ink"
+                  >
+                    Back
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {view === "done" && outcome && (
+            <ResultView outcome={outcome} onReveal={reveal} onAgain={reset} />
+          )}
+        </div>
+      </main>
+
+      <SettingsSheet
+        open={showSettings}
+        onOpenChange={setShowSettings}
+        settings={settings}
+        kaggle={kaggle}
+        onPatch={patch}
+        onKaggleSaved={(k, s) => { setKaggle(k); setSettings(s) }}
       />
     </div>
+  )
+}
+
+function Dot() {
+  return <span aria-hidden className="size-[3px] rounded-full bg-edge-lit" />
+}
+
+function Centered({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="relative z-10 flex h-full flex-col items-center justify-center px-10 text-center">
+      {children}
+    </div>
+  )
+}
+
+function PrimaryButton({
+  children, onClick, disabled,
+}: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "flex items-center gap-2.5 rounded-xl px-5 py-3 text-[14px] font-semibold transition-[filter,transform,background-color] duration-150",
+        disabled
+          ? "cursor-not-allowed border border-edge text-ink-3"
+          : "bg-pulse text-[#26060f] shadow-[0_8px_28px_-12px_var(--pulse)] hover:brightness-110 active:scale-[0.985]",
+      )}
+    >
+      {children}
+    </button>
   )
 }

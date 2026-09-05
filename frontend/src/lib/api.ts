@@ -11,6 +11,7 @@ type PyApi = {
   choose_folder(current?: string): Promise<Res<{ path: string | null }>>
   choose_audio_file(current?: string): Promise<Res<{ path: string | null }>>
   reveal(path: string): Promise<Res<Empty>>
+  open_external(url: string): Promise<Res<Empty>>
   start_run(options: {
     audio_source: string
     track_indices: number[]
@@ -64,15 +65,24 @@ export function ready(timeoutMs = 8000): Promise<boolean> {
    there is no Python side. Never used once pywebview injects its bridge.
    --------------------------------------------------------------------------- */
 const mockSettings: Settings = {
-  audio_dir: "/Users/you/Documents/ResolveSubtitleTool/audio",
-  srt_dir: "/Users/you/Documents/ResolveSubtitleTool/srt",
+  audio_dir: "/Users/you/Documents/Krevon Scribe/audio",
+  srt_dir: "/Users/you/Documents/Krevon Scribe/srt",
   font_en: "Helvetica Neue",
   font_ar: "Geeza Pro",
   kaggle_username: "",
-  whisper_model: "large-v3",
+  whisper_model: "large-v2",
+  whisper_detect_model: "large-v3",
+  code_switch_method: "model",
+  code_switch_model: "Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched",
+  cue_script_policy: "split",
   whisper_language: "auto",
   arabic_threshold: 0.5,
   primary_language: "en",
+  single_track: true,
+  forced_alignment: true,
+  replace_existing_subtitles: false,
+  backend: "kaggle",
+  speechmatics_api_key: "",
 }
 
 const mockInfo: TimelineInfo = {
@@ -90,27 +100,33 @@ const mockInfo: TimelineInfo = {
 const emit = (e: AppEvent) => window.__appEvent?.(e)
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+const mockKaggle: KaggleStatus = {
+  config_dir: "~/.kaggle", has_env_token: false, has_token_file: false,
+  has_kaggle_json: false, username: "", configured: false,
+}
+
 const mock: PyApi = {
   async get_bootstrap() {
-    return { ok: true, settings: mockSettings, kaggle: {
-      config_dir: "~/.kaggle", has_env_token: false, has_token_file: false,
-      has_kaggle_json: false, username: "", configured: false,
-    }, resolve: { ok: true, info: mockInfo }, platform: "darwin",
-      config_path: "~/Library/Application Support/ResolveSubtitleTool/settings.json" }
+    return {
+      ok: true, settings: mockSettings, kaggle: mockKaggle,
+      resolve: { ok: true, info: mockInfo }, platform: "darwin",
+      config_path: "~/Library/Application Support/Krevon Scribe/settings.json",
+    }
   },
   async get_resolve_state() { return { ok: true, info: mockInfo } },
   async save_settings(v) { Object.assign(mockSettings, v); return { ok: true, settings: mockSettings } },
   async save_kaggle_credentials() {
-    return { ok: true, kaggle: { config_dir: "~/.kaggle", has_env_token: false,
-      has_token_file: true, has_kaggle_json: false, username: "you", configured: true },
-      settings: mockSettings }
+    Object.assign(mockKaggle, { has_token_file: true, username: "you", configured: true })
+    mockSettings.kaggle_username = "you"
+    return { ok: true, kaggle: mockKaggle, settings: mockSettings }
   },
   async choose_folder() { return { ok: true, path: "/Users/you/Desktop/picked" } },
   async choose_audio_file() { return { ok: true, path: "/Users/you/Desktop/take01.wav" } },
   async reveal() { return { ok: true } },
+  async open_external() { return { ok: true } },
   async is_running() { return { ok: true, running: false } },
   async start_run() {
-    ;(async () => {
+    void (async () => {
       emit({ event: "run_started", payload: {} })
       for (const m of [
         "Timeline 'EP04 Rough Cut' at 24 fps.",
@@ -121,22 +137,41 @@ const mock: PyApi = {
         "Uploading audio to a private Kaggle dataset…",
         "Dataset ready.",
         "Pushing the GPU kernel…",
+        "Queued on Kaggle. This usually takes several minutes.",
         "Kernel status: running",
         "Kernel status: complete",
         "Downloading results…",
-        "Transcribed 214 segments.",
-        "Routed 138 cues to English and 76 to Arabic.",
-        "Placed 138 cues on subtitle track 1.",
-      ]) { await wait(420); emit({ event: "log", payload: { message: m } }) }
-      emit({ event: "run_finished", payload: {
-        audio_path: "/Users/you/Documents/ResolveSubtitleTool/audio/EP04.wav",
-        en_srt: "/Users/you/Documents/ResolveSubtitleTool/srt/EP04.en.srt",
-        ar_srt: "/Users/you/Documents/ResolveSubtitleTool/srt/EP04.ar.srt",
-        en_cues: 138, ar_cues: 76, placed_language: "en", placed_cues: 138,
-        manual_srt: "/Users/you/Documents/ResolveSubtitleTool/srt/EP04.ar.srt",
-        manual_track_index: 2, detected_language: "ar",
-        warnings: ["Set the fonts by hand in the Inspector — Helvetica Neue for English, Geeza Pro for Arabic. Resolve exposes no font API."],
-      } })
+        "Transcribed 13 segments.",
+        "Routed 8 cues to English and 5 to Arabic.",
+        "Wrote EP04.srt (13 cues), plus the split files.",
+        "Placed 13 cues on subtitle track 1.",
+      ]) { await wait(520); emit({ event: "log", payload: { message: m } }) }
+      emit({
+        event: "run_finished", payload: {
+          audio_path: "/Users/you/Documents/Krevon Scribe/audio/EP04.wav",
+          combined_srt: "/Users/you/Documents/Krevon Scribe/srt/EP04.srt",
+          en_srt: "/Users/you/Documents/Krevon Scribe/srt/EP04.en.srt",
+          ar_srt: "/Users/you/Documents/Krevon Scribe/srt/EP04.ar.srt",
+          en_cues: 8, ar_cues: 5, combined_cues: 13,
+          placed_language: "mixed", placed_cues: 13,
+          manual_srt: null, manual_track_index: null, detected_language: "en",
+          preview: [
+            { start: 0.0, end: 3.1, text: "Okay, so now time for the chickens." },
+            { start: 3.1, end: 6.25, text: "There's a secret to chicken bath?" },
+            { start: 6.25, end: 9.4, text: "بدنا نحمل ال chickens" },
+            { start: 9.4, end: 11.33, text: "ال chicken bath" },
+            { start: 11.33, end: 12.6, text: "Why? What's the secret?" },
+            { start: 14.58, end: 18.42, text: "هيكون في مي دافية وشوي صابون" },
+            { start: 18.67, end: 22.4, text: "And then we dry them off properly." },
+            { start: 26.67, end: 27.38, text: "ولا شيء" },
+          ],
+          preview_truncated: false,
+          font_hint: "One track carries both languages, so it carries one font. Select the "
+            + "subtitle track in Resolve and set the Inspector font to one that covers "
+            + "Arabic and Latin — Geeza Pro.",
+          warnings: [],
+        },
+      })
     })()
     return { ok: true, started: true }
   },
