@@ -6,6 +6,9 @@
 
 pywebview>=6.0
 kaggle>=1.6
+# Used directly by the Speechmatics backend. kaggle pulls it in too, but a
+# direct dependency should be declared rather than inherited.
+requests>=2.31
 
 # pywebview's Windows backend drives the WebView2 runtime through .NET.
 # WebView2 itself ships with Windows 10 and 11.

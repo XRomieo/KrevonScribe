@@ -42,6 +42,22 @@ jobs:
           if (-not (Test-Path $index)) { throw "frontend was not bundled ($index)" }
           Write-Host "OK: $((Get-Item $exe).Length) bytes"
 
+      # Files being present does not prove the bundle runs: PyInstaller fails
+      # by dropping an import that is only reached at runtime. This starts the
+      # built executable and makes it import and exercise the real thing.
+      # It is a windowed build with no console on Windows, so the report is
+      # read back from a file rather than from stdout.
+      - name: Run the frozen self-test
+        shell: pwsh
+        run: |
+          $exe = "dist/ResolveSubtitles/ResolveSubtitles.exe"
+          $report = "selftest.txt"
+          $p = Start-Process -FilePath $exe `
+                             -ArgumentList "--selftest","--selftest-out",$report `
+                             -Wait -PassThru -NoNewWindow
+          if (Test-Path $report) { Get-Content $report } else { Write-Host "no report written" }
+          if ($p.ExitCode -ne 0) { throw "self-test failed (exit $($p.ExitCode))" }
+
       - name: Stage portable folder
         shell: pwsh
         run: |

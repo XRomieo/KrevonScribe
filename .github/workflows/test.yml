@@ -18,10 +18,33 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # subtitle_utils is dependency-free, so the logic suite needs no
-      # Resolve install and no GUI toolkit.
+      # Deliberately pytest and nothing else. The logic suite must stay
+      # runnable without Resolve, a GUI toolkit or any network dependency, and
+      # installing nothing else is what keeps that true: a stray top-level
+      # import of requests or kaggle fails here rather than in a user's build.
       - run: pip install pytest
       - run: python -m pytest tests -q
+
+  selftest:
+    name: Self-test from source
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - run: pip install -r requirements.txt
+      - name: Build the frontend
+        run: python scripts/build.py --frontend-only
+      # Imports what the app imports and exercises the logic end to end,
+      # without needing Resolve, credentials or a network.
+      - run: python app.py --selftest
 
   frontend:
     runs-on: ubuntu-latest

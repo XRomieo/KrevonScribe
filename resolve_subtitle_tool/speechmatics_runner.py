@@ -21,11 +21,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
-import requests
-
 Progress = Callable[[str], None]
 
 DEFAULT_ENDPOINT = "https://asr.api.speechmatics.com/v2"
+
+
+def _requests():
+    """Import requests on first use, the way kaggle_runner imports kaggle.
+
+    Nothing here needs it until a job is actually submitted, and importing it at
+    module scope made the cue-building logic — which is pure arithmetic over the
+    transcript — untestable without the dependency installed.
+    """
+    try:
+        import requests
+    except ImportError as exc:  # pragma: no cover - dependency is declared
+        raise SpeechmaticsError(
+            "The 'requests' package is not installed. Run: pip install requests"
+        ) from exc
+    return requests
 
 # Sentence-final punctuation in both scripts; Arabic uses its own question mark
 # and full stop, which the Latin set does not cover.
@@ -66,7 +80,7 @@ def submit(
         },
     }
     with audio_path.open("rb") as handle:
-        response = requests.post(
+        response = _requests().post(
             f"{endpoint.rstrip('/')}/jobs/",
             headers=_headers(api_key),
             files={"data_file": (audio_path.name, handle, "application/octet-stream")},
@@ -106,7 +120,7 @@ def wait(
     deadline = time.time() + timeout_seconds
     last = None
     while time.time() < deadline:
-        response = requests.get(
+        response = _requests().get(
             f"{endpoint.rstrip('/')}/jobs/{job_id}", headers=_headers(api_key), timeout=60
         )
         if not response.ok:
@@ -130,7 +144,7 @@ def wait(
 def fetch_transcript(
     job_id: str, api_key: str, *, endpoint: str = DEFAULT_ENDPOINT
 ) -> dict:
-    response = requests.get(
+    response = _requests().get(
         f"{endpoint.rstrip('/')}/jobs/{job_id}/transcript",
         headers=_headers(api_key),
         params={"format": "json-v2"},
