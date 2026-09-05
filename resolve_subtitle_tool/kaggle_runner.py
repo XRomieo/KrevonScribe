@@ -113,7 +113,7 @@ def transcribe(
     align: bool = True,
     code_switch_method: str = "model",
     cs_model: str = "Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched",
-    cue_script_policy: str = "mixed",
+    cue_script_policy: str = "split",
     slug: str | None = None,
     output_dir: str | Path | None = None,
     progress: Progress | None = None,

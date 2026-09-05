@@ -58,10 +58,10 @@ class Settings:
     # hand-marked spans: 94.7% against 65-78%.
     code_switch_method: str = "model"
     code_switch_model: str = "Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched"
-    # "mixed" keeps a sentence whole when the speaker switches language inside
-    # it; "split" never lets one cue hold both scripts, which costs some very
-    # short cues.
-    cue_script_policy: str = "mixed"
+    # "split" never lets one cue hold both scripts, at the cost of some
+    # very short cues; "mixed" keeps a sentence whole when the speaker switches
+    # language inside it.
+    cue_script_policy: str = "split"
     # Language hint passed to whisper. "auto" lets it detect; for code-switched
     # Arabic/English audio an explicit hint usually helps.
     whisper_language: str = "auto"

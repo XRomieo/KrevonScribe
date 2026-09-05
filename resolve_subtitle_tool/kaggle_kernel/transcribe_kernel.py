@@ -45,10 +45,10 @@ DEFAULTS = {
     "code_switch_method": "model",
     "cs_model": "Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched",
     "cs_language": "ar",
-    # "mixed" keeps a sentence whole even when the speaker switches inside it
-    # ("بدنا نحمل ال chickens" is one phrase). "split" never lets a cue hold two
-    # scripts, at the cost of some very short cues.
-    "cue_script_policy": "mixed",
+    # "split" never lets a cue hold two scripts, so each one can be read
+    # (and typeset) in a single language. Costs some very short cues where the
+    # speaker switches inside a phrase. "mixed" keeps such a sentence whole.
+    "cue_script_policy": "split",
     # Shortest script run kept when it interrupts a longer stretch of the other
     # language. Below ~1s the merge is measurably worse; 1.0-3.0 all score the
     # same, so this sits in the middle of that plateau.
@@ -60,6 +60,10 @@ DEFAULTS = {
     "max_chars": 84,
     "max_duration": 6.0,
     "min_cue_duration": 0.25,
+    # A cue shorter than this is not broken at a full stop. Without it, fast
+    # speech splits into unreadable flashes -- "Why?" alone for 0.18s -- where
+    # a subtitler would have kept the question and its answer together.
+    "min_cue_before_break": 1.2,
     # Forced alignment: whisper's own word times drift, so the cue text is
     # re-timed against the audio by a CTC aligner afterwards.
     "align": True,
@@ -480,6 +484,7 @@ def cues_from_words(words_by_lang, spans, settings):
     max_gap = float(settings["max_gap"])
     max_chars = int(settings["max_chars"])
     max_duration = float(settings["max_duration"])
+    min_before_break = float(settings.get("min_cue_before_break", 0.0))
     sentence_end = tuple(".!?\u061f\u06d4\u2026")
 
     def owner(t):
@@ -511,12 +516,13 @@ def cues_from_words(words_by_lang, spans, settings):
                     "seq" in word and "seq" in previous
                     and word["seq"] != previous["seq"] + 1
                 )
+                grown = end_t - float(current[0]["start"])
                 if (
                     interrupted
                     or start_t - float(previous["end"]) > max_gap
                     or len(text_so_far) >= max_chars
-                    or end_t - float(current[0]["start"]) > max_duration
-                    or text_so_far.endswith(sentence_end)
+                    or grown > max_duration
+                    or (text_so_far.endswith(sentence_end) and grown >= min_before_break)
                 ):
                     cues.append(_finish_cue(current, lang))
                     current = []

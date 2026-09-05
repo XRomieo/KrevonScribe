@@ -91,6 +91,37 @@ because it is shorter than the threshold; requiring matching neighbours protects
 it, since an edge run has nothing to interrupt. The default is 1.5 s, the middle
 of the flat 1.0–3.0 s plateau.
 
+## One cue, one script
+
+The speaker switches language *inside* a sentence — `بدنا نحمل ال chickens` is
+Arabic "we want to bathe the" with an English noun, and the words are confident
+(0.67–0.81). It is real code-switching, not hallucination. But a cue holding both
+scripts is hard to read and impossible to typeset, since one track carries one
+font, so `cue_script_policy` defaults to `"split"`: no cue holds two scripts.
+
+Two problems had to be solved to make that usable.
+
+Splitting revealed that `cues_from_words` welded words back together across an
+interruption. The caller had already filtered the word list to one language, so
+the span check could never fire, and the words either side of an interruption sit
+well within the pause threshold. The result was cues that *overlapped* the ones
+they were interrupted by. Cues now also break when a word of the other language
+sat in between.
+
+Splitting also produces genuinely short cues. Deleting them loses words the
+viewer heard — "Why?" is really said in 0.18 s. Instead a short cue is held on
+screen into the silence after it, never past the next cue; only a fragment with
+no room at all is dropped. And a cue is no longer broken at a full stop while it
+is still under 1.2 s, which keeps "Why? What's the secret?" together the way a
+subtitler would.
+
+## Punctuation follows the letter before it
+
+The model writes Arabic punctuation after English words — `Why؟` — because it
+learned the two together. Correcting per cue would be wrong, because a cue may
+hold both scripts; each mark is decided from the nearest preceding letter
+instead. Latin punctuation inside Arabic is left alone, since it reads fine.
+
 ## Whisper's timestamps drift; forced alignment fixes it
 
 The render is not the problem: cross-correlating Resolve's rendered audio

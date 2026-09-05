@@ -282,3 +282,49 @@ def test_tagged_split_skips_empty_text():
                 {"start": 1.0, "end": 2.0, "text": "kept", "language": "en"}]
     english, _ = split_tagged_segments(segments)
     assert [c.text for c in english] == ["kept"]
+
+
+# --- short cues are held, not deleted -------------------------------------
+
+def test_a_short_cue_is_held_into_the_gap_after_it():
+    # "Why?" is really said in 0.18s; deleting it loses a word the viewer heard.
+    cues = merge_for_single_track(
+        [Cue(0.0, 0.18, "Why?"), Cue(2.0, 3.0, "Because.")]
+    )
+    assert [c.text for c in cues] == ["Why?", "Because."]
+    assert cues[0].end == pytest.approx(0.9)
+
+
+def test_holding_never_runs_into_the_next_cue():
+    cues = merge_for_single_track(
+        [Cue(0.0, 0.18, "Why?"), Cue(0.4, 1.4, "Because.")]
+    )
+    assert cues[0].end == pytest.approx(0.4)
+    assert cues[0].end <= cues[1].start
+
+
+def test_a_long_enough_cue_is_left_alone():
+    cues = merge_for_single_track([Cue(0.0, 2.0, "Okay.")])
+    assert cues[0].end == pytest.approx(2.0)
+
+
+def test_the_last_cue_can_be_held_past_its_end():
+    cues = merge_for_single_track([Cue(5.0, 5.2, "ولا شيء.")])
+    assert cues[0].end == pytest.approx(5.9)
+
+
+def test_a_fragment_with_no_room_at_all_is_still_dropped():
+    # 40ms with the next cue immediately after: nothing readable to salvage.
+    cues = merge_for_single_track(
+        [Cue(0.0, 1.0, "one"), Cue(1.0, 1.04, "ال"), Cue(1.04, 2.0, "two")],
+        min_duration=0.12,
+    )
+    assert [c.text for c in cues] == ["one", "two"]
+
+
+def test_held_cues_stay_in_order_and_never_overlap():
+    cues = merge_for_single_track(
+        [Cue(0.0, 0.2, "a"), Cue(0.3, 0.5, "b"), Cue(0.6, 0.8, "c"), Cue(3.0, 4.0, "d")]
+    )
+    for earlier, later in zip(cues, cues[1:]):
+        assert earlier.end <= later.start

@@ -65,6 +65,10 @@ text is then re-timed against the audio by a CTC forced aligner. Both steps are
 measured in [docs/TRANSCRIPTION_FINDINGS.md](docs/TRANSCRIPTION_FINDINGS.md)
 against language spans marked by hand in Resolve.
 
+No cue holds both scripts: the speaker switches language inside a sentence, and
+one track carries one font. Set `cue_script_policy = "mixed"` to keep such a
+sentence whole instead, at the cost of cues that mix Arabic and Latin.
+
 Set `code_switch_method = "confidence"` to fall back to the older route (stock
 whisper run four times, language inferred from decoder confidence). It scores
 65–78% against the same spans and varies between runs, so it is only worth

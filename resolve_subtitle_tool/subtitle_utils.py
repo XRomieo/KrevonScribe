@@ -181,16 +181,20 @@ def split_tagged_segments(
 
 
 def merge_for_single_track(
-    *groups: Sequence[Cue], min_duration: float = 0.2
+    *groups: Sequence[Cue], min_duration: float = 0.12, min_display: float = 0.9
 ) -> list[Cue]:
     """Interleave several languages into one non-overlapping, ordered track.
 
     Resolve shows one subtitle track at a time, so both languages have to share
     a track to be watchable — and a single track cannot hold overlapping cues.
-    Whisper's two language passes do overlap at a switch (one decoder's last
-    word runs past the other's first), so where they collide the earlier cue is
-    trimmed to end where the next begins, and dropped entirely if that leaves it
-    too short to read.
+    Where two cues collide the earlier one is trimmed to end where the next
+    begins.
+
+    A cue shorter than ``min_display`` is then held on screen into the silence
+    after it, up to that length, rather than being deleted: a real word said
+    quickly ("Why?", 0.18 s) is worth reading, and the gap before the next cue
+    costs nothing. Only what still cannot reach ``min_duration`` — a fragment
+    with no room at all — is dropped.
     """
     merged = sorted(
         (cue for group in groups for cue in group), key=lambda c: (c.start, c.end)
@@ -205,6 +209,15 @@ def merge_for_single_track(
                 out.pop()
         if cue.end - cue.start >= min_duration:
             out.append(cue)
+
+    for i, cue in enumerate(out):
+        if cue.end - cue.start >= min_display:
+            continue
+        # Never past the next cue: the track holds one subtitle at a time.
+        ceiling = out[i + 1].start if i + 1 < len(out) else cue.start + min_display
+        end = min(cue.start + min_display, ceiling)
+        if end > cue.end:
+            out[i] = Cue(cue.start, end, cue.text)
     return out
 
 
