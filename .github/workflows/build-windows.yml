@@ -9,6 +9,11 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+    # The build only needs to read the repo; the release step needs to write
+    # one. The repo default is read-only, so creating a release 403s without
+    # this. Scoped to this job rather than loosening the repo-wide setting.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
