@@ -42,8 +42,31 @@ def build_frontend(skip_install: bool) -> None:
     print(f"Staged frontend -> {STAGED.relative_to(ROOT)}")
 
 
+# .NET Framework refuses to load an assembly whose file is marked as coming
+# from another zone, and Windows marks every file extracted from a downloaded
+# zip that way. pywebview reaches WebView2 through pythonnet, so that refusal
+# stops the app before its window opens, with a traceback ending in
+# "Failed to resolve Python.Runtime.Loader.Initialize". Telling the runtime to
+# trust remote sources lifts it. The CLR reads this file by the host process's
+# name, so it has to sit beside the exe, not under _internal/.
+EXE_CONFIG = """<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <runtime>
+    <loadFromRemoteSources enabled="true" />
+  </runtime>
+  <startup>
+    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.0" />
+  </startup>
+</configuration>
+"""
+
+
 def build_bundle() -> None:
     run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "app.spec"], cwd=ROOT)
+    if sys.platform == "win32":
+        target = ROOT / "dist" / "KrevonScribe" / "KrevonScribe.exe.config"
+        target.write_text(EXE_CONFIG, encoding="utf-8")
+        print(f"Wrote {target.relative_to(ROOT)}")
 
 
 def main() -> None:

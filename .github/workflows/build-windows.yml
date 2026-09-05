@@ -45,6 +45,11 @@ jobs:
           if (-not (Test-Path $exe)) { throw "missing $exe" }
           $index = "dist/KrevonScribe/_internal/frontend_dist/index.html"
           if (-not (Test-Path $index)) { throw "frontend was not bundled ($index)" }
+          # Must sit beside the exe, not under _internal/: the CLR finds it by
+          # the host process name. Without it .NET refuses to load
+          # Python.Runtime.dll once Windows has zone-marked the unzipped files.
+          $cfg = "dist/KrevonScribe/KrevonScribe.exe.config"
+          if (-not (Test-Path $cfg)) { throw "missing $cfg" }
           Write-Host "OK: $((Get-Item $exe).Length) bytes"
 
       # Files being present does not prove the bundle runs: PyInstaller fails

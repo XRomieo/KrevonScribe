@@ -40,6 +40,15 @@ def _flag_value(flag: str) -> str | None:
     return None
 
 
+def _gui_backend_modules() -> tuple[str, ...]:
+    """The imports pywebview makes to reach a native window, by platform."""
+    if sys.platform == "win32":
+        return ("clr", "webview.platforms.winforms")
+    if sys.platform == "darwin":
+        return ("webview.platforms.cocoa",)
+    return ()
+
+
 def selftest() -> int:
     """Verify a build can actually do its job, and report what it found.
 
@@ -65,6 +74,13 @@ def selftest() -> int:
     # Imports PyInstaller has to have been told about; a missing hidden import
     # shows up here rather than the first time someone presses Transcribe.
     for module in ("webview", "kaggle.api.kaggle_api_extended", "requests"):
+        check(f"import {module}", lambda m=module: importlib.import_module(m).__name__)
+
+    # Importing `webview` alone proves nothing about the window opening: the GUI
+    # backend is resolved later, and on Windows it drags in pythonnet and starts
+    # a .NET runtime. A build shipped once where exactly that step failed on the
+    # user's machine while every other check here passed, so exercise it.
+    for module in _gui_backend_modules():
         check(f"import {module}", lambda m=module: importlib.import_module(m).__name__)
 
     from . import kaggle_runner, subtitle_utils
@@ -109,6 +125,19 @@ def selftest() -> int:
     return 1 if failed else 0
 
 
+def _fatal(message: str) -> None:
+    """Report a startup failure. A windowed build has no console to print to."""
+    print(message, file=sys.stderr)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message, WINDOW_TITLE, 0x10)
+        except Exception:
+            pass  # Nothing left to fall back to; the exit code still reports it.
+    raise SystemExit(1)
+
+
 def main() -> None:
     if "--selftest" in sys.argv:
         raise SystemExit(selftest())
@@ -129,7 +158,22 @@ def main() -> None:
     )
     api.window = window
     # debug=True opens the inspector; keep it off for released builds.
-    webview.start(debug="--debug" in sys.argv)
+    try:
+        webview.start(debug="--debug" in sys.argv)
+    except RuntimeError as exc:
+        if "Python.Runtime" not in str(exc):
+            raise
+        # Windows blocked the .NET assembly the window is drawn through. The
+        # traceback for this names only internals, so say what to do instead.
+        _fatal(
+            "Windows blocked a file this app needs.\n\n"
+            "Files extracted from a downloaded zip are marked as untrusted, and "
+            ".NET refuses to load them. To clear the mark, open PowerShell in "
+            "the folder you unzipped and run:\n\n"
+            "    Get-ChildItem -Recurse | Unblock-File\n\n"
+            "Then start Krevon Scribe again. Unzipping to a local drive rather "
+            "than a network drive avoids this too."
+        )
 
 
 if __name__ == "__main__":

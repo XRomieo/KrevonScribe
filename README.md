@@ -251,3 +251,15 @@ roughly 30 GPU-hours a week.
 
 **Windows build is flagged by SmartScreen** — the executable is unsigned. Choose
 *More info* → *Run anyway*, or sign it yourself.
+
+**Windows: "Failed to resolve Python.Runtime.Loader.Initialize"** — Windows
+marks files extracted from a downloaded zip as untrusted, and .NET then refuses
+to load the assembly pywebview draws its window through. Builds now ship a
+`KrevonScribe.exe.config` that lifts the restriction. On an older build, clear
+the mark by hand from the unzipped folder:
+
+```powershell
+Get-ChildItem -Recurse | Unblock-File
+```
+
+Unzipping to a local drive rather than a network drive avoids it as well.
