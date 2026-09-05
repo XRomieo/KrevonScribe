@@ -46,20 +46,34 @@ drag onto its own track.
 
 ## Choosing a transcription backend
 
-| | `speechmatics` | `kaggle` |
+| | `kaggle` (default) | `speechmatics` |
 |---|---|---|
-| Model | Melia 1 | Whisper large-v2 + large-v3 |
-| Arabic/English code-switching | native, one pass | inferred, four passes |
-| Mixed error rate (published benchmark) | **15.1%** | — (Whisper is not in that table) |
-| Language per word | reported by the model | inferred from confidences |
-| Cost | $100 starting credit, no card | free |
-| Setup | one API key | Kaggle account, phone-verified |
-| Sends audio to | Speechmatics | Kaggle |
+| Model | `whisper-medium-arabic-codeswitched` | Melia 1 |
+| Arabic/English code-switching | native, one pass | native, one pass |
+| Language accuracy on the test clip | **95.4%** | not yet measured |
+| Language per word | read off the script | reported by the model |
+| Timestamps | re-timed by CTC forced alignment | reported by the model |
+| Cost | free | $100 starting credit, no card |
+| Setup | Kaggle account, phone-verified | one API key |
+| Sends audio to | Kaggle | Speechmatics |
 
-`speechmatics` is the accurate one and needs far less machinery, because Melia
+`kaggle` is the default and is free. It transcribes once with a checkpoint
+fine-tuned on code-switched Arabic/English, which writes Arabic speech in Arabic
+script and English in Latin *within the same sentence* — so the language is read
+off the transcript rather than guessed. Whisper's timestamps drift, so the cue
+text is then re-timed against the audio by a CTC forced aligner. Both steps are
+measured in [docs/TRANSCRIPTION_FINDINGS.md](docs/TRANSCRIPTION_FINDINGS.md)
+against language spans marked by hand in Resolve.
+
+Set `code_switch_method = "confidence"` to fall back to the older route (stock
+whisper run four times, language inferred from decoder confidence). It scores
+65–78% against the same spans and varies between runs, so it is only worth
+reaching for if Hugging Face is unreachable.
+
+`speechmatics` is the paid alternative, and needs less machinery still, because Melia
 tags every word with the language it was spoken in — the split becomes a lookup
-rather than an inference. `kaggle` stays the default so the tool works with no
-third-party account beyond Kaggle.
+rather than an inference. It has not been run against real audio yet: the code and its
+tests exist, but nobody has supplied an API key.
 
 ## Requirements
 

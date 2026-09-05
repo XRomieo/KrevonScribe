@@ -36,6 +36,19 @@ DEFAULTS = {
     # than letting whisper pick one language for the whole file.
     "code_switch": True,
     "languages": ["en", "ar"],
+    # "model" transcribes once with a checkpoint fine-tuned on code-switched
+    # Arabic/English, which writes each word in the script it was spoken in, so
+    # the language is read off the text. "confidence" is the older route: two
+    # models, four forced-language passes, language inferred from which decoder
+    # was more sure. Scored against hand-marked spans on the test clip: 94.7%
+    # for "model", 65-78% for "confidence". See docs/TRANSCRIPTION_FINDINGS.md.
+    "code_switch_method": "model",
+    "cs_model": "Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched",
+    "cs_language": "ar",
+    # Shortest script run kept when it interrupts a longer stretch of the other
+    # language. Below ~1s the merge is measurably worse; 1.0-3.0 all score the
+    # same, so this sits in the middle of that plateau.
+    "min_run": 1.5,
     "conf_slot": 0.25,
     "conf_smooth": 2.0,
     "min_span": 1.5,
@@ -165,6 +178,137 @@ def _release(model):
         torch.cuda.empty_cache()
     except Exception:
         pass
+
+
+# ------------------------------------------------- code-switch by script
+
+# Same ranges as subtitle_utils.is_arabic_char. Duplicated rather than imported
+# because this file is uploaded to Kaggle on its own, with no package around it.
+_ARABIC_RANGES = (
+    (0x0600, 0x06FF), (0x0750, 0x077F), (0x0870, 0x089F), (0x08A0, 0x08FF),
+    (0xFB50, 0xFDFF), (0xFE70, 0xFEFF), (0x10EC0, 0x10EFF),
+)
+_ARABIC_DIGITS = set(range(0x0660, 0x066A)) | set(range(0x06F0, 0x06FA))
+
+
+def word_language(word, languages=("en", "ar")):
+    """Which language a word is written in, or None if it carries no script.
+
+    A code-switch checkpoint writes each word in the script it was spoken in, so
+    this reads the language off the transcript instead of inferring it. Digits
+    and punctuation are script-neutral and return None, so "؟" or "2024" does
+    not start a new run on its own.
+    """
+    import unicodedata
+
+    letters = [c for c in word
+               if not c.isspace()
+               and ord(c) not in _ARABIC_DIGITS
+               and unicodedata.category(c).startswith("L")]
+    if not letters:
+        return None
+    arabic = sum(1 for c in letters
+                 if any(lo <= ord(c) <= hi for lo, hi in _ARABIC_RANGES))
+    ar = "ar" if "ar" in languages else languages[-1]
+    en = "en" if "en" in languages else languages[0]
+    return ar if arabic * 2 >= len(letters) else en
+
+
+def script_runs(words, min_run, languages=("en", "ar")):
+    """Group words into runs of a single script, then drop momentary flickers.
+
+    What is left to clean up is noise, not ambiguity: one mis-scripted word in
+    the middle of a sentence. A short run is absorbed only when the *same*
+    language sits on both sides of it — that is what makes it an interruption.
+    A short run at either end is kept, because a genuine switch in the last
+    second of a clip has nothing to interrupt and would otherwise be erased.
+    """
+    runs = []
+    for word in words:
+        lang = word_language(word["word"], languages)
+        if lang is None:
+            lang = runs[-1][2] if runs else languages[0]
+        if runs and runs[-1][2] == lang:
+            runs[-1][1] = float(word["end"])
+        else:
+            runs.append([float(word["start"]), float(word["end"]), lang])
+
+    changed = True
+    while changed and len(runs) > 2:
+        changed = False
+        for i in range(1, len(runs) - 1):
+            if runs[i][1] - runs[i][0] < min_run and runs[i - 1][2] == runs[i + 1][2]:
+                runs[i - 1][1] = runs[i + 1][1]
+                del runs[i:i + 2]
+                changed = True
+                break
+    return [(a, b, lang) for a, b, lang in runs]
+
+
+def _ensure_ct2_model(repo):
+    """Return a path faster-whisper can load, converting from transformers if needed.
+
+    The code-switch checkpoints are published in transformers format and
+    faster-whisper only loads CTranslate2, so they are converted on the fly
+    (about a minute for the medium model). The output goes to /tmp rather than
+    the kernel's working directory, which would otherwise be downloaded as
+    several gigabytes of kernel "results".
+    """
+    if "/" not in repo:
+        return repo                      # a plain whisper size like "large-v2"
+    target = Path("/tmp") / ("ct2-" + repo.replace("/", "--"))
+    if (target / "model.bin").is_file():
+        log(f"reusing converted model at {target}")
+        return str(target)
+    try:
+        import transformers  # noqa: F401
+    except ImportError:
+        log("installing transformers for the checkpoint conversion…")
+        _pip("transformers")
+    log(f"converting {repo} to CTranslate2 (about a minute)…")
+    started = time.time()
+    subprocess.check_call([
+        "ct2-transformers-converter", "--model", repo,
+        "--output_dir", str(target), "--force", "--quantization", "float32",
+    ])
+    log(f"converted in {time.time() - started:.1f}s")
+    return str(target)
+
+
+def transcribe_with_code_switch_model(WhisperModel, settings, device, has_gpu, pcm, sr):
+    """One pass with a checkpoint that already writes both languages.
+
+    The older route ran four forced-language passes and guessed the language
+    from decoder confidence, because stock whisper commits to one language per
+    file and *translates* the rest. A fine-tuned code-switch checkpoint does not:
+    it emits Arabic script for Arabic speech and Latin for English, in the same
+    sentence, so one pass gives both the text and the language.
+    """
+    languages = tuple(str(l) for l in settings["languages"])
+    path = _ensure_ct2_model(str(settings["cs_model"]))
+    model, compute_type = _load_model(WhisperModel, settings, device, has_gpu, path)
+    log(f"code-switch model loaded (compute_type={compute_type})")
+
+    language = settings["cs_language"] or None
+    words = _pass_words(model, pcm, language, settings)
+    log(f"  {len(words)} words")
+
+    runs = script_runs(words, float(settings["min_run"]), languages)
+    for a, b, lang in runs:
+        log(f"  run {a:6.2f}-{b:6.2f}s -> {lang}")
+
+    def owner(t):
+        for a, b, lang in runs:
+            if a <= t < b:
+                return lang
+        return runs[-1][2] if runs else languages[0]
+
+    words_by_lang = {}
+    for word in words:
+        lang = owner((float(word["start"]) + float(word["end"])) / 2.0)
+        words_by_lang.setdefault(lang, []).append(word)
+
+    return cues_from_words(words_by_lang, runs, settings), runs
 
 
 def language_spans_from_words(words_by_lang, total, settings):
@@ -308,8 +452,14 @@ def cues_from_words(words_by_lang, spans, settings):
     return cues
 
 
+# Punctuation that belongs to the *previous* sentence. A cue break lands
+# between a word and the stop that follows it, so the stop would otherwise open
+# the next cue (".In this episode…").
+_LEADING_PUNCTUATION = " .,;:!?\u060c\u061b\u061f\u06d4\u2026-"
+
+
 def _finish_cue(words, lang):
-    text = "".join(w["word"] for w in words).strip()
+    text = "".join(w["word"] for w in words).lstrip(_LEADING_PUNCTUATION).strip()
     return {
         "start": round(float(words[0]["start"]), 3),
         "end": round(float(words[-1]["end"]), 3),
@@ -567,10 +717,16 @@ def main():
 
         pcm = decode_audio(str(audio), sampling_rate=sr)
         duration = len(pcm) / sr
-        log(f"code-switch pass over {duration:.2f}s using {settings['languages']}")
-        out, spans = transcribe_code_switched(
-            WhisperModel, settings, device, has_gpu, pcm, sr
-        )
+        method = str(settings["code_switch_method"] or "model")
+        log(f"code-switch pass ({method}) over {duration:.2f}s using {settings['languages']}")
+        if method == "model":
+            out, spans = transcribe_with_code_switch_model(
+                WhisperModel, settings, device, has_gpu, pcm, sr
+            )
+        else:
+            out, spans = transcribe_code_switched(
+                WhisperModel, settings, device, has_gpu, pcm, sr
+            )
         span_summary = [
             {"start": round(a, 2), "end": round(b, 2), "language": lang} for a, b, lang in spans
         ]

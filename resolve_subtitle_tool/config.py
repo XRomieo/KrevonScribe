@@ -51,6 +51,13 @@ class Settings:
     kaggle_username: str = ""
     whisper_model: str = "large-v2"
     whisper_detect_model: str = "large-v3"
+    # How the two languages are told apart. "model" transcribes once with a
+    # checkpoint fine-tuned on code-switched Arabic/English, which writes each
+    # word in the script it was spoken in; "confidence" runs stock whisper four
+    # times and infers the language from decoder confidence. Measured against
+    # hand-marked spans: 94.7% against 65-78%.
+    code_switch_method: str = "model"
+    code_switch_model: str = "Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched"
     # Language hint passed to whisper. "auto" lets it detect; for code-switched
     # Arabic/English audio an explicit hint usually helps.
     whisper_language: str = "auto"

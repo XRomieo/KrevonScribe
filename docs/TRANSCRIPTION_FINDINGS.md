@@ -14,16 +14,102 @@ cue would have landed on the Arabic track.
 Per-VAD-region detection did not either, because with music under the whole clip
 VAD sees a single 27 s speech region.
 
-The real structure, established by windowed detection and confirmed
-independently by word-confidence collapse in a forced-English pass:
+The real structure was later marked by hand in Resolve by the project owner and
+is kept as `tests/fixtures/codeswitch_ground_truth.json`. It is the authority
+every number below is scored against:
 
 | Time | Language |
 |---|---|
-| 0.0–4.0 s | English |
-| 4.0–10.0 s | Arabic |
-| 10.0–13.8 s | English |
-| 13.8–17.5 s | Arabic |
-| 18.0–27.4 s | English |
+| 0.000–6.250 s | English |
+| 6.250–11.333 s | Arabic |
+| 11.333–14.500 s | English |
+| 14.583–18.417 s | Arabic |
+| 18.667–26.583 s | English |
+| 26.667–27.375 s | Arabic |
+
+My earlier estimate of these spans, inferred from windowed detection, was wrong
+at every boundary — it put the first switch at 4.0 s rather than 6.25 s and
+missed the final Arabic word entirely, calling it English ("Nothing." is in fact
+`ولا شيء`). Scoring against inferred ground truth had been flattering the
+detector to itself.
+
+## A fine-tuned code-switch checkpoint beats all of the above
+
+Stock whisper commits to one language per file and *translates* the rest, so
+everything above is machinery for working around that. Checkpoints fine-tuned on
+code-switched Arabic/English do not have the problem: they write Arabic speech
+in Arabic script and English in Latin, in the same sentence. The language can
+then be **read off the transcript** instead of inferred.
+
+Scored per 10 ms against the hand-marked spans:
+
+| Route | Language accuracy |
+|---|---|
+| `large-v2` + `large-v3` confidence spans (6 runs) | **65–78%**, varying run to run |
+| `IbrahimAmin/code-switched-egyptian-arabic-whisper-small` | 93.5% |
+| `Seif-Eldeen-Sameh/whisper-medium-arabic-codeswitched` | **94.7%** |
+
+End to end on the timeline the chosen model scores **95.4%**, recovers exactly
+six spans matching the six marked ones, and misroutes no cue at all — the only
+remaining error is silence between cues that no cue covers.
+
+What the difference looks like in the text, same audio:
+
+- stock `large-v2` forced to Arabic: `حسناً, الآن حان الوقت للحمام البقر` — a
+  hallucinated "pigeon-cow bath"; the English words are translated away.
+- code-switch checkpoint: `Okay, so now time for the chickens, بدنا نحمل ال
+  chickens, ال chicken bath.` — the English is kept as English.
+
+The dialect is Levantine (`بدنا`, `هيكون`, `مافي`), not the Egyptian the model
+card advertises, and it transcribes it anyway.
+
+Both checkpoints are Apache-2.0. They ship in transformers format, so the kernel
+converts to CTranslate2 on the fly (51 s for the medium model) into `/tmp` —
+not `/kaggle/working`, which would be downloaded back as gigabytes of "results".
+
+### Cleaning up the script runs
+
+Grouping words by script leaves the occasional mis-scripted word mid-sentence. A
+short run is absorbed only when the *same* language sits on both sides of it, so
+that it is genuinely an interruption:
+
+| Minimum run | Absorb any short run | Absorb interruptions only |
+|---|---|---|
+| 0.5 s | 86.7% | 87.6% |
+| 1.0 s | 93.8% | **94.7%** |
+| 1.5 s | 93.8% | **94.7%** |
+| 3.0 s | 93.8% | **94.7%** |
+
+Absorbing indiscriminately erases the real 0.71 s Arabic run that ends the clip,
+because it is shorter than the threshold; requiring matching neighbours protects
+it, since an edge run has nothing to interrupt. The default is 1.5 s, the middle
+of the flat 1.0–3.0 s plateau.
+
+## Whisper's timestamps drift; forced alignment fixes it
+
+The render is not the problem: cross-correlating Resolve's rendered audio
+against the source video gives a **0 ms** offset. Whisper *infers* timestamps
+from its own decoder rather than measuring them, and they drift.
+
+Cue text is therefore re-timed against the audio with torchaudio's `MMS_FA` CTC
+aligner. uroman transliterates both scripts, so one pass handles the bilingual
+transcript rather than one pass per language.
+
+| Transcription route | Median correction | Worst |
+|---|---|---|
+| `large-v2` + `large-v3` confidence spans | 0.306 s | 2.526 s |
+| code-switch checkpoint | 0.065 s | 0.320 s |
+
+The second row is the more interesting one: the fine-tuned model's own
+timestamps are already close, and alignment mostly confirms them. The 2.5 s
+worst case in the first row is what "the subtitles don't match the audio" was.
+
+Kaggle hands out P100s (sm_60) and recent torch builds ship no kernels for that
+architecture, so `torch.cuda.is_available()` returns True and the first CUDA op
+then dies with "no kernel image is available". The device is probed with a
+throwaway op instead; alignment falls back to CPU, which costs seconds at this
+length. CTranslate2 is unaffected — it carries its own kernels, which is why
+faster-whisper runs on the GPU regardless.
 
 ## Two models, because detection and transcription want opposite things
 
