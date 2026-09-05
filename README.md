@@ -112,6 +112,26 @@ To produce a `.app` bundle instead, install `requirements-dev.txt` and run
 `python scripts/build.py`, which writes `dist/ResolveSubtitles.app`. It is
 unsigned, so first launch needs right-click → Open.
 
+### Checking a build
+
+```bash
+python app.py --selftest          # or: ResolveSubtitles.exe --selftest
+```
+
+Imports what the app imports and exercises the cue logic end to end, without
+needing Resolve, credentials or a network. It exists because a PyInstaller
+bundle fails in a particular way — every file present, and then an import that
+only happens at runtime missing on the user's machine — which checking the
+folder contents cannot catch. CI runs it against the built Windows executable.
+Since a windowed Windows build has no console, `--selftest-out <path>` writes
+the report to a file.
+
+The Windows portable build is produced by
+[`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) on
+every push to `main`, and attached to a GitHub Release when a `v*` tag is
+pushed. PyInstaller cannot cross-compile, so the `.exe` must be built on
+Windows; that workflow is the only supported way to produce it.
+
 ---
 
 ## Using it
