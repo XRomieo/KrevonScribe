@@ -183,3 +183,23 @@ def test_arabic_question_marks_do_not_lead_a_cue(kernel):
         "ar",
     )
     assert cue["text"] == "لماذا"
+
+
+def test_words_are_separated_across_a_script_change(kernel):
+    # Whisper gives Latin tokens a leading space and Arabic tokens none, so the
+    # two fuse without help.
+    cue = kernel._finish_cue(
+        [{"start": 0.0, "end": 0.6, "word": " secret؟"},
+         {"start": 0.6, "end": 1.2, "word": "هيكون"}],
+        "en",
+    )
+    assert cue["text"] == "secret؟ هيكون"
+
+
+def test_existing_spacing_is_not_doubled(kernel):
+    cue = kernel._finish_cue(
+        [{"start": 0.0, "end": 0.4, "word": "chicken"},
+         {"start": 0.4, "end": 0.9, "word": " bath"}],
+        "en",
+    )
+    assert cue["text"] == "chicken bath"

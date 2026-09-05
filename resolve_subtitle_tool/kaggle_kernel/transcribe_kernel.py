@@ -459,7 +459,16 @@ _LEADING_PUNCTUATION = " .,;:!?\u060c\u061b\u061f\u06d4\u2026-"
 
 
 def _finish_cue(words, lang):
-    text = "".join(w["word"] for w in words).lstrip(_LEADING_PUNCTUATION).strip()
+    # Whisper's word tokens carry their own leading space for Latin script but
+    # not for Arabic, so concatenating blindly fuses the two across a switch
+    # ("secret؟هيكون"). Supply the separator when neither side has one.
+    text = ""
+    for word in words:
+        piece = word["word"]
+        if text and not text[-1].isspace() and not piece[:1].isspace():
+            text += " "
+        text += piece
+    text = text.lstrip(_LEADING_PUNCTUATION).strip()
     return {
         "start": round(float(words[0]["start"]), 3),
         "end": round(float(words[-1]["end"]), 3),
