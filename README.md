@@ -263,3 +263,9 @@ Get-ChildItem -Recurse | Unblock-File
 ```
 
 Unzipping to a local drive rather than a network drive avoids it as well.
+
+**Windows: the window opens but says it could not start** — the frontend is
+served over `127.0.0.1` rather than `file://`, because pywebview does not fully
+support `file://` and on Windows the page rendered while the JavaScript bridge
+never attached. If this reappears, the error names what the bridge is exposing;
+"nothing" means the bridge never arrived.

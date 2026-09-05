@@ -9,7 +9,7 @@ import { SettingsSheet } from "@/components/SettingsSheet"
 import { Mark } from "@/components/Mark"
 import { Switch } from "@/components/ui/switch"
 
-import { api, callWithRetry, onAppEvent, ready } from "@/lib/api"
+import { api, callWithRetry, isNative, onAppEvent, ready } from "@/lib/api"
 import { furthest, stageOf, type StageId } from "@/lib/stages"
 import type { Bootstrap, KaggleStatus, Res, RunOutcome, Settings, TimelineInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -58,7 +58,16 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      await ready()
+      const bridged = await ready()
+      if (!bridged && isNative()) {
+        if (!cancelled) {
+          setFatal(
+            "The window opened but never connected to the Python side. "
+            + "Closing Krevon Scribe and starting it again usually clears this.",
+          )
+        }
+        return
+      }
       let res: Awaited<ReturnType<typeof api.get_bootstrap>>
       try {
         res = await callWithRetry(() => api.get_bootstrap())

@@ -159,7 +159,12 @@ def main() -> None:
     api.window = window
     # debug=True opens the inspector; keep it off for released builds.
     try:
-        webview.start(debug="--debug" in sys.argv)
+        # http_server=True serves the frontend over 127.0.0.1 instead of file://.
+        # pywebview documents file:// as not fully supported, and on Windows the
+        # page rendered while the js_api bridge never attached, leaving the UI
+        # with no window.pywebview.api to call. A real origin fixes that, and
+        # costs nothing on macOS, where file:// happened to work.
+        webview.start(debug="--debug" in sys.argv, http_server=True)
     except RuntimeError as exc:
         if "Python.Runtime" not in str(exc):
             raise

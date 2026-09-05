@@ -41,18 +41,41 @@ export function onAppEvent(fn: (e: AppEvent) => void) {
   return () => { listeners.delete(fn) }
 }
 
-export const isNative = () => typeof window.pywebview?.api !== "undefined"
+/**
+ * Whether we are inside pywebview at all, which decides real bridge vs mock.
+ *
+ * Deliberately checks `window.pywebview` and not `.api`: pywebview creates the
+ * api object before it attaches the methods, and a stricter test here would
+ * make a real run briefly look like a browser and serve it mock data.
+ */
+export const isNative = () => typeof window.pywebview !== "undefined"
 
-/** Resolves once pywebview has injected its bridge. */
-export function ready(timeoutMs = 8000): Promise<boolean> {
-  if (isNative()) return Promise.resolve(true)
+/** One method that must exist before any call can be made. */
+const PROBE = "get_bootstrap"
+
+const bridgeUsable = () =>
+  typeof (window.pywebview?.api as Record<string, unknown> | undefined)?.[PROBE] === "function"
+
+/**
+ * Resolves once the bridge can actually be called.
+ *
+ * pywebview's own docs warn that `pywebview.api` is not guaranteed to be ready
+ * when the page loads, so waiting for the object to appear is not enough — on
+ * Windows the object shows up empty and the methods land a moment later. Wait
+ * for a method instead, and give WebView2 room to cold-start.
+ */
+export function ready(timeoutMs = 15000): Promise<boolean> {
+  if (bridgeUsable()) return Promise.resolve(true)
   return new Promise((resolve) => {
     let done = false
     const finish = (v: boolean) => { if (!done) { done = true; resolve(v) } }
-    window.addEventListener("pywebviewready", () => finish(true), { once: true })
+    // The event can fire before the methods are attached, so it re-checks
+    // rather than resolving outright; the poll below is what usually wins.
+    window.addEventListener("pywebviewready", () => { if (bridgeUsable()) finish(true) })
     const t0 = Date.now()
     const tick = () => {
-      if (isNative()) return finish(true)
+      if (bridgeUsable()) return finish(true)
+      if (!isNative()) return finish(false)   // plain browser: fall through to the mock
       if (Date.now() - t0 > timeoutMs) return finish(false)
       setTimeout(tick, 60)
     }
@@ -215,7 +238,16 @@ export const api: PyApi = new Proxy({} as PyApi, {
     return (...args: unknown[]) => {
       const impl = (isNative() ? window.pywebview!.api : mock) as unknown as
         Record<string, (...a: unknown[]) => Promise<unknown>>
-      return impl[prop](...args)
+      const fn = impl?.[prop]
+      if (typeof fn !== "function") {
+        // Minified, the bare call reads "(intermediate value)[t] is not a
+        // function", which says nothing about what went wrong. Name it.
+        const found = Object.keys(impl ?? {}).join(", ") || "nothing"
+        throw new Error(
+          `The Python bridge has no ${prop}(). It is exposing: ${found}.`,
+        )
+      }
+      return fn(...args)
     }
   },
 })
