@@ -264,6 +264,14 @@ Get-ChildItem -Recurse | Unblock-File
 
 Unzipping to a local drive rather than a network drive avoids it as well.
 
+**Windows: the app freezes for twenty seconds on every page load** — fixed.
+pywebview builds its JavaScript bridge by walking every public attribute of the
+`Api` object and recursing into any that is a plain object. The native window
+was reachable that way, and the .NET graph behind it returns a new object on
+every read, so pywebview's `id()`-based cycle guard never fired and the walk ran
+until the stack was exhausted. Attributes on `Api` that are not meant for
+JavaScript must start with an underscore; `tests/test_api_bridge.py` enforces it.
+
 **Windows: the window is blank, or the app says it needs WebView2** — the UI
 needs the Microsoft Edge WebView2 runtime and .NET Framework 4.6.2 or newer.
 Windows 11 and current Windows 10 have both. Without them pywebview silently

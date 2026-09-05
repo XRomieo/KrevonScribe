@@ -91,3 +91,70 @@ class TestSaveSettings:
     def test_settings_survive_a_reload(self, api):
         api.save_settings({"kaggle_username": "someone"})
         assert api_bridge.config.load().kaggle_username == "someone"
+
+
+class TestPywebviewCanBuildItsBridge:
+    """pywebview walks this object to build window.pywebview.api.
+
+    Its walker recurses into any public attribute that is a non-callable
+    object, and its cycle guard remembers id()s. A .NET property that returns a
+    fresh object on every read therefore never repeats an id, and the walk runs
+    until the stack is exhausted -- which is what froze the Windows build for
+    twenty seconds on every page load.
+    """
+
+    @staticmethod
+    def walk(obj, base="", seen=None, functions=None):
+        """A faithful copy of pywebview.util's get_functions.
+
+        No depth limit on purpose: pywebview has none either, and a cap here
+        would hide exactly the runaway this test exists to catch.
+        """
+        import inspect
+
+        seen = [] if seen is None else seen
+        functions = {} if functions is None else functions
+        if id(obj) in seen:
+            return functions
+        seen.append(id(obj))
+        for name in dir(obj):
+            if name.startswith("_"):
+                continue
+            full = f"{base}.{name}" if base else name
+            attr = getattr(obj, name)
+            if inspect.ismethod(attr) or inspect.isfunction(attr):
+                functions[full] = True
+            elif inspect.isclass(attr) or (
+                isinstance(attr, object) and not callable(attr)
+                and hasattr(attr, "__module__")
+            ):
+                TestPywebviewCanBuildItsBridge.walk(attr, full, seen, functions)
+        return functions
+
+    def test_every_public_attribute_is_callable(self, api):
+        offenders = [
+            n for n in dir(api)
+            if not n.startswith("_") and not callable(getattr(api, n))
+        ]
+        assert not offenders, (
+            f"{offenders} are public non-callable attributes. pywebview will "
+            "recurse into them when it builds the JS bridge; prefix with _."
+        )
+
+    def test_the_bridge_still_exposes_the_methods_the_frontend_calls(self, api):
+        found = self.walk(api)
+        for name in ("get_bootstrap", "start_run", "save_settings", "reveal"):
+            assert name in found, f"{name} would not reach JavaScript"
+
+    def test_a_window_that_recurses_forever_is_not_walked(self, api):
+        class Endless:
+            """Stands in for the WinForms graph: a new object on every read."""
+
+            @property
+            def empty(self):
+                return Endless()
+
+        api._window = Endless()
+        found = self.walk(api)          # raises RecursionError if it descends
+        assert "get_bootstrap" in found
+        assert not [k for k in found if k.startswith("window")], found

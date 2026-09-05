@@ -291,7 +291,7 @@ def main() -> None:
         min_size=(720, 640),
         background_color="#0f0e13",
     )
-    api.window = window
+    api._window = window  # underscored on purpose; see Api.__init__
     # debug=True opens the inspector; keep it off for released builds.
     try:
         # http_server=True serves the frontend over 127.0.0.1 instead of file://.

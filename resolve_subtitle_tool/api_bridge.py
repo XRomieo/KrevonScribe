@@ -40,19 +40,27 @@ class Api:
     """Backend surface callable from JavaScript as ``window.pywebview.api.*``."""
 
     def __init__(self) -> None:
-        self.window = None
-        self.settings = config.load()
+        # Both of these must stay underscored. pywebview builds its JS bridge by
+        # walking every public attribute of this object and recursing into any
+        # that is a non-callable object. A public `window` sent it into the
+        # native window's .NET graph, where Rectangle.Empty returns a new object
+        # each time, so its id()-based cycle guard never fired -- it recursed
+        # until the stack blew, on the UI thread, on every page load. That is a
+        # twenty-second freeze on Windows. macOS never hit it: the Cocoa window
+        # does not expose an equivalent graph.
+        self._window = None
+        self._settings = config.load()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
     # -- plumbing --------------------------------------------------------
     def _emit(self, event: str, payload: Any) -> None:
         """Push an event into the page. Safe to call from a worker thread."""
-        if self.window is None:
+        if self._window is None:
             return
         try:
             message = json.dumps({"event": event, "payload": payload})
-            self.window.evaluate_js(f"window.__appEvent && window.__appEvent({message})")
+            self._window.evaluate_js(f"window.__appEvent && window.__appEvent({message})")
         except Exception:
             pass  # the UI going away must never kill a running job
 
@@ -62,7 +70,7 @@ class Api:
     # -- state -----------------------------------------------------------
     def get_bootstrap(self) -> dict:
         return _ok(
-            settings=self.settings.to_dict(),
+            settings=self._settings.to_dict(),
             kaggle=config.kaggle_status(),
             resolve=self.get_resolve_state(),
             platform=sys.platform,
@@ -81,13 +89,13 @@ class Api:
     def save_settings(self, values: dict) -> dict:
         try:
             known = {f.name for f in fields(config.Settings)}
-            current = self.settings.to_dict()
+            current = self._settings.to_dict()
             current.update({k: v for k, v in (values or {}).items() if k in known})
             # Keep numeric fields numeric even if the input arrives as a string.
             current["arabic_threshold"] = float(current["arabic_threshold"])
-            self.settings = config.Settings(**current)
-            config.save(self.settings)
-            return _ok(settings=self.settings.to_dict())
+            self._settings = config.Settings(**current)
+            config.save(self._settings)
+            return _ok(settings=self._settings.to_dict())
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 
@@ -109,19 +117,19 @@ class Api:
                 from . import kaggle_runner
                 username = kaggle_runner.detect_username()
             if username:
-                self.settings.kaggle_username = username
-                config.save(self.settings)
-            return _ok(kaggle=config.kaggle_status(), settings=self.settings.to_dict())
+                self._settings.kaggle_username = username
+                config.save(self._settings)
+            return _ok(kaggle=config.kaggle_status(), settings=self._settings.to_dict())
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 
     # -- dialogs ---------------------------------------------------------
     def choose_folder(self, current: str = "") -> dict:
         import webview
-        if self.window is None:
+        if self._window is None:
             return _err("Window is not ready yet.")
         try:
-            picked = self.window.create_file_dialog(
+            picked = self._window.create_file_dialog(
                 webview.FOLDER_DIALOG, directory=current or str(Path.home())
             )
             return _ok(path=picked[0] if picked else None)
@@ -130,10 +138,10 @@ class Api:
 
     def choose_audio_file(self, current: str = "") -> dict:
         import webview
-        if self.window is None:
+        if self._window is None:
             return _err("Window is not ready yet.")
         try:
-            picked = self.window.create_file_dialog(
+            picked = self._window.create_file_dialog(
                 webview.OPEN_DIALOG,
                 directory=current or str(Path.home()),
                 allow_multiple=False,
@@ -204,7 +212,7 @@ class Api:
         self._emit("run_started", {})
         try:
             outcome = pipeline.run(
-                self.settings,
+                self._settings,
                 audio_source=options.get("audio_source", "timeline"),
                 track_indices=[int(i) for i in options.get("track_indices", [])],
                 audio_file=options.get("audio_file"),
