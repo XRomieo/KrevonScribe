@@ -101,6 +101,38 @@ def _status_error(status) -> str:
     return getattr(status, "failure_message", "") or getattr(status, "failureMessage", "") or ""
 
 
+def _kernels_output_utf8(api, kernel_ref: str, out_dir: str) -> None:
+    """Download kernel output with text files forced to UTF-8.
+
+    The Kaggle SDK writes the kernel log with ``open(path, "w")`` — no encoding
+    argument.  On Windows that defaults to cp1252, which cannot represent the
+    Arabic characters in the transcription output and raises a ``charmap`` error.
+    Temporarily patching ``builtins.open`` to inject ``encoding="utf-8"`` when
+    no encoding is given and the mode is text is the narrowest fix that does not
+    depend on Kaggle shipping a patch.
+    """
+    if sys.platform != "win32":
+        api.kernels_output(kernel_ref, out_dir, force=True, quiet=True)
+        return
+
+    import builtins
+
+    _real_open = builtins.open
+
+    def _utf8_open(*args, **kwargs):
+        # Only touch text-mode opens that forgot to specify an encoding.
+        mode = args[1] if len(args) > 1 else kwargs.get("mode", "r")
+        if "b" not in mode and "encoding" not in kwargs:
+            kwargs["encoding"] = "utf-8"
+        return _real_open(*args, **kwargs)
+
+    builtins.open = _utf8_open  # type: ignore[assignment]
+    try:
+        api.kernels_output(kernel_ref, out_dir, force=True, quiet=True)
+    finally:
+        builtins.open = _real_open  # type: ignore[assignment]
+
+
 def transcribe(
     audio_path: str | Path,
     username: str,
@@ -254,7 +286,7 @@ def transcribe(
         out_dir.mkdir(parents=True, exist_ok=True)
         say("Downloading results…")
         try:
-            api.kernels_output(kernel_ref, str(out_dir), force=True, quiet=True)
+            _kernels_output_utf8(api, kernel_ref, str(out_dir))
         except Exception as exc:
             raise KaggleRunError(f"Downloading kernel output failed: {exc}") from exc
 
