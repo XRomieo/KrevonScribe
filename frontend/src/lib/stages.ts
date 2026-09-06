@@ -4,14 +4,13 @@
  * A run takes several minutes on someone else's GPU, and the only questions a
  * user has while waiting are "where is it" and "is it stuck". A scrolling log
  * answers both badly, so the log lines are matched against the messages the
- * pipeline actually emits and collapsed into six stages.
+ * pipeline actually emits and collapsed into four stages.
  *
  * Matching is deliberately loose and the result is monotonic: an unrecognised
  * line leaves the stage where it was, and nothing ever moves backwards.
  */
 
-export type StageId =
-  | "render" | "upload" | "queue" | "transcribe" | "cues" | "place"
+export type StageId = "upload" | "queue" | "transcribe" | "cues"
 
 export type Stage = {
   id: StageId
@@ -23,17 +22,11 @@ export type Stage = {
 
 export const STAGES: Stage[] = [
   {
-    id: "render",
-    label: "Render audio",
-    note: "Mixing the armed tracks out of Resolve.",
-    patterns: [/^timeline '/i, /^using /i, /muted \d+ of/i, /rendering audio/i, /^rendered /i],
-  },
-  {
     id: "upload",
     label: "Upload",
     note: "Sending the audio to a private dataset.",
     patterns: [
-      /sending to kaggle/i, /uploading .*(kaggle|dataset|speechmatics)/i,
+      /^using /i, /sending to kaggle/i, /uploading .*(kaggle|dataset|speechmatics)/i,
       /^staging /i, /^dataset (ready|still processing)/i,
     ],
   },
@@ -57,15 +50,9 @@ export const STAGES: Stage[] = [
   },
   {
     id: "cues",
-    label: "Split into cues",
-    note: "Separating the two scripts and writing the subtitle files.",
+    label: "Write the subtitles",
+    note: "Separating the two scripts and writing the .srt files.",
     patterns: [/^routed \d+ cues/i, /^wrote /i],
-  },
-  {
-    id: "place",
-    label: "Place in Resolve",
-    note: "Importing onto a subtitle track.",
-    patterns: [/removed \d+ existing subtitle/i, /^placed \d+ cues/i, /media pool/i],
   },
 ]
 

@@ -33,6 +33,13 @@
   --go:       #4ade9a;
   --stop:     #ff7a5c;
 
+  /* The window buttons, on the builds that draw their own title bar. Two of
+     the three are the palette's own colours; the amber appears nowhere else,
+     and only ever as one 14px dot. */
+  --light-min:   #f0b23c;
+  --light-max:   var(--go);
+  --light-close: var(--pulse);
+
   --radius:   0.625rem;
 
   /* shadcn token surface, mapped onto the palette above */

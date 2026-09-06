@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.venv*/
 venv/
 *.egg-info/
 
@@ -13,6 +14,7 @@ resolve_subtitle_tool/frontend_dist/
 frontend/dist/
 frontend/node_modules/
 frontend/.vite/
+selftest*.txt
 
 # Local state — credentials must never be committed
 .kaggle/

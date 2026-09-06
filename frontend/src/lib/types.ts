@@ -1,9 +1,6 @@
 /** Mirrors resolve_subtitle_tool/config.py Settings. */
 export type Settings = {
-  audio_dir: string
   srt_dir: string
-  font_en: string
-  font_ar: string
   kaggle_username: string
   whisper_model: string
   whisper_detect_model: string
@@ -12,34 +9,9 @@ export type Settings = {
   cue_script_policy: string
   whisper_language: string
   arabic_threshold: number
-  primary_language: string
-  single_track: boolean
   forced_alignment: boolean
-  replace_existing_subtitles: boolean
   backend: string
   speechmatics_api_key: string
-}
-
-export type AudioTrack = {
-  index: number
-  name: string
-  sub_type: string
-  enabled: boolean
-  clip_count: number
-}
-
-export type TimelineInfo = {
-  product: string
-  version: string
-  project: string
-  timeline: string
-  fps: number
-  start_frame: number
-  end_frame: number
-  audio_tracks: AudioTrack[]
-  subtitle_track_count: number
-  populated_subtitle_tracks: number[]
-  has_content: boolean
 }
 
 export type KaggleStatus = {
@@ -61,14 +33,9 @@ export type RunOutcome = {
   en_cues: number
   ar_cues: number
   combined_cues: number
-  placed_language: string | null
-  placed_cues: number
-  manual_srt: string | null
-  manual_track_index: number | null
   detected_language: string
   preview: PreviewCue[]
   preview_truncated: boolean
-  font_hint: string
   warnings: string[]
 }
 
@@ -77,11 +44,21 @@ export type Fail = { ok: false; error: string; kind?: string }
 export type Ok<T> = { ok: true } & T
 export type Res<T> = Ok<T> | Fail
 
+/**
+ * Who draws the title bar. "custom" means this app does, because the window is
+ * frameless -- see resolve_subtitle_tool/window_chrome.py.
+ */
+export type ChromeKind = "custom" | "native"
+
+/** The frameless window's controls, as window_command() names them. */
+export type WindowAction =
+  | "state" | "minimize" | "toggle_maximize" | "close" | "drag"
+
 export type Bootstrap = {
   settings: Settings
   kaggle: KaggleStatus
-  resolve: Res<{ info: TimelineInfo }>
   platform: string
+  chrome: ChromeKind
   config_path: string
 }
 

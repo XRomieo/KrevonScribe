@@ -99,7 +99,7 @@ export function SettingsSheet({
     onKaggleSaved(res.kaggle, res.settings)
   }
 
-  async function browse(which: "audio_dir" | "srt_dir") {
+  async function browse(which: "srt_dir") {
     const res = await api.choose_folder(settings[which])
     if (res.ok && res.path) onPatch({ [which]: res.path } as Partial<Settings>)
   }
@@ -209,39 +209,15 @@ export function SettingsSheet({
           </Group>
 
           <Group title="Subtitles">
-            <Field
-              label="Font to use in Resolve"
-              hint="A reminder only. Resolve exposes no font API, so this is set by hand in the Inspector — pick one that covers Arabic and Latin."
-            >
-              <Input
-                value={settings.font_ar}
-                onChange={(e) => onPatch({ font_ar: e.target.value })}
-                className="text-[12.5px]"
-              />
-            </Field>
-
-            <SwitchRow
-              label="Clear subtitle tracks before importing"
-              hint="Resolve sends every import to the track that already holds cues, so a second run refuses to place anything unless this is on. It deletes those tracks."
-              checked={settings.replace_existing_subtitles}
-              onChange={(v) => onPatch({ replace_existing_subtitles: v })}
-            />
-
             <SwitchRow
               label="Re-time cues against the audio"
               hint="Whisper infers its timestamps and they drift. Forced alignment measures them instead, and costs about a minute of GPU time."
               checked={settings.forced_alignment}
               onChange={(v) => onPatch({ forced_alignment: v })}
             />
-          </Group>
 
-          <Group title="Where files are written">
             <PathField
-              label="Rendered audio" value={settings.audio_dir}
-              onBrowse={() => void browse("audio_dir")}
-            />
-            <PathField
-              label="Subtitle files" value={settings.srt_dir}
+              label="Where subtitle files are written" value={settings.srt_dir}
               onBrowse={() => void browse("srt_dir")}
             />
           </Group>

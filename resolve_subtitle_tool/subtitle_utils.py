@@ -1,6 +1,6 @@
 """Cue modelling, Arabic/English routing and SRT writing.
 
-This module is deliberately dependency-free and knows nothing about Resolve or
+This module is deliberately dependency-free and knows nothing about editors or
 Kaggle, so it can be tested standalone against a sample ``segments.json``.
 """
 
@@ -185,10 +185,10 @@ def merge_for_single_track(
 ) -> list[Cue]:
     """Interleave several languages into one non-overlapping, ordered track.
 
-    Resolve shows one subtitle track at a time, so both languages have to share
-    a track to be watchable — and a single track cannot hold overlapping cues.
-    Where two cues collide the earlier one is trimmed to end where the next
-    begins.
+    An editor shows one subtitle track at a time, so both languages have to
+    share a track to be watchable — and a single track cannot hold overlapping
+    cues. Where two cues collide the earlier one is trimmed to end where the
+    next begins.
 
     A cue shorter than ``min_display`` is then held on screen into the silence
     after it, up to that length, rather than being deleted: a real word said
@@ -224,18 +224,16 @@ def merge_for_single_track(
 def render_srt(cues: Sequence[Cue], offset: float = 0.0) -> str:
     """Render cues as SRT text.
 
-    Resolve places an imported SRT at ``timeline_start + cue_time``, so cue times
-    measured from the start of the exported audio are used as-is and ``offset``
-    stays 0 for the normal timeline path. It exists for the manual-file mode,
-    where the audio may begin partway into the timeline.
+    Cue times are measured from the start of the audio file and are written
+    as-is, which is what an editor wants when the .srt is dropped at the point
+    the audio starts. ``offset`` shifts every cue for the case where it is not.
     """
     blocks = []
     for index, cue in enumerate(sorted(cues, key=lambda c: (c.start, c.end)), start=1):
         start = format_timestamp(cue.start + offset)
         end = format_timestamp(cue.end + offset)
         blocks.append(f"{index}\n{start} --> {end}\n{cue.text}\n")
-    # SRT readers are happiest with a trailing blank line and CRLF-free output;
-    # Resolve accepts LF.
+    # SRT readers are happiest with a trailing blank line and CRLF-free output.
     return "\n".join(blocks)
 
 

@@ -21,23 +21,23 @@ def isolated(tmp_path, monkeypatch):
 
 
 class TestSettings:
-    def test_defaults_fill_in_output_dirs(self):
+    def test_defaults_fill_in_the_output_dir(self):
         s = config.Settings()
-        assert s.audio_dir and s.srt_dir
+        assert s.srt_dir
         assert s.arabic_threshold == 0.5
 
     def test_round_trip(self, isolated):
-        s = config.Settings(font_en="Futura", arabic_threshold=0.25)
+        s = config.Settings(whisper_model="medium", arabic_threshold=0.25)
         config.save(s)
-        assert config.load().font_en == "Futura"
+        assert config.load().whisper_model == "medium"
         assert config.load().arabic_threshold == 0.25
 
     def test_missing_file_yields_defaults(self, isolated):
-        assert config.load().font_en == config.Settings().font_en
+        assert config.load().whisper_model == config.Settings().whisper_model
 
     def test_corrupt_file_yields_defaults_instead_of_raising(self, isolated):
         config.CONFIG_PATH.write_text("{not json", encoding="utf-8")
-        assert config.load().font_en == config.Settings().font_en
+        assert config.load().whisper_model == config.Settings().whisper_model
 
     def test_non_dict_json_yields_defaults(self, isolated):
         config.CONFIG_PATH.write_text("[1,2,3]", encoding="utf-8")
@@ -45,20 +45,20 @@ class TestSettings:
 
     def test_unknown_keys_are_ignored(self, isolated):
         config.CONFIG_PATH.write_text(
-            json.dumps({"font_en": "Futura", "removed_option": 1}), encoding="utf-8"
+            json.dumps({"whisper_model": "medium", "removed_option": 1}), encoding="utf-8"
         )
-        assert config.load().font_en == "Futura"
+        assert config.load().whisper_model == "medium"
 
     def test_settings_from_the_old_app_name_are_still_read(self, isolated):
         # Upgrading to the Krevon Scribe name must not reset someone's setup.
         config.LEGACY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         config.LEGACY_CONFIG_PATH.write_text(
-            json.dumps({"kaggle_username": "olduser", "font_en": "Futura"}),
+            json.dumps({"kaggle_username": "olduser", "whisper_model": "medium"}),
             encoding="utf-8",
         )
         loaded = config.load()
         assert loaded.kaggle_username == "olduser"
-        assert loaded.font_en == "Futura"
+        assert loaded.whisper_model == "medium"
 
     def test_the_new_location_wins_over_the_old_one(self, isolated):
         config.LEGACY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

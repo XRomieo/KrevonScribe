@@ -1,10 +1,9 @@
 import type {
-  AppEvent, Bootstrap, Empty, KaggleStatus, Res, Settings, TimelineInfo,
+  AppEvent, Bootstrap, Empty, KaggleStatus, Res, Settings, WindowAction,
 } from "./types"
 
 type PyApi = {
   get_bootstrap(): Promise<Res<Bootstrap>>
-  get_resolve_state(): Promise<Res<{ info: TimelineInfo }>>
   save_settings(values: Partial<Settings>): Promise<Res<{ settings: Settings }>>
   save_kaggle_credentials(v: { token?: string; username?: string; key?: string }):
     Promise<Res<{ kaggle: KaggleStatus; settings: Settings }>>
@@ -12,13 +11,9 @@ type PyApi = {
   choose_audio_file(current?: string): Promise<Res<{ path: string | null }>>
   reveal(path: string): Promise<Res<Empty>>
   open_external(url: string): Promise<Res<Empty>>
-  start_run(options: {
-    audio_source: string
-    track_indices: number[]
-    audio_file: string | null
-    import_to_resolve: boolean
-  }): Promise<Res<{ started: boolean }>>
+  start_run(options: { audio_file: string | null }): Promise<Res<{ started: boolean }>>
   is_running(): Promise<Res<{ running: boolean }>>
+  window_command(action: WindowAction): Promise<Res<{ maximized: boolean }>>
 }
 
 declare global {
@@ -67,13 +62,13 @@ const BRIDGE_METHODS = [
   { func: "choose_audio_file", params: ["current"] },
   { func: "choose_folder", params: ["current"] },
   { func: "get_bootstrap", params: [] },
-  { func: "get_resolve_state", params: [] },
   { func: "is_running", params: [] },
   { func: "open_external", params: ["url"] },
   { func: "reveal", params: ["path"] },
   { func: "save_kaggle_credentials", params: ["values"] },
   { func: "save_settings", params: ["values"] },
   { func: "start_run", params: ["options"] },
+  { func: "window_command", params: ["action"] },
 ]
 
 type PyWebview = {
@@ -155,10 +150,7 @@ export function ready(timeoutMs = 20000): Promise<boolean> {
    there is no Python side. Never used once pywebview injects its bridge.
    --------------------------------------------------------------------------- */
 const mockSettings: Settings = {
-  audio_dir: "/Users/you/Documents/Krevon Scribe/audio",
-  srt_dir: "/Users/you/Documents/Krevon Scribe/srt",
-  font_en: "Helvetica Neue",
-  font_ar: "Geeza Pro",
+  srt_dir: "/Users/you/Documents/Krevon Scribe",
   kaggle_username: "",
   whisper_model: "large-v2",
   whisper_detect_model: "large-v3",
@@ -167,24 +159,9 @@ const mockSettings: Settings = {
   cue_script_policy: "split",
   whisper_language: "auto",
   arabic_threshold: 0.5,
-  primary_language: "en",
-  single_track: true,
   forced_alignment: true,
-  replace_existing_subtitles: false,
   backend: "kaggle",
   speechmatics_api_key: "",
-}
-
-const mockInfo: TimelineInfo = {
-  product: "DaVinci Resolve Studio", version: "21.0.0.47",
-  project: "Ramadan Doc", timeline: "EP04 Rough Cut",
-  fps: 24, start_frame: 86400, end_frame: 118080,
-  audio_tracks: [
-    { index: 1, name: "Dialogue", sub_type: "stereo", enabled: true, clip_count: 42 },
-    { index: 2, name: "Interview B", sub_type: "mono", enabled: true, clip_count: 17 },
-    { index: 3, name: "Music Bed", sub_type: "stereo", enabled: true, clip_count: 6 },
-  ],
-  subtitle_track_count: 0, populated_subtitle_tracks: [], has_content: true,
 }
 
 const emit = (e: AppEvent) => window.__appEvent?.(e)
@@ -198,12 +175,12 @@ const mockKaggle: KaggleStatus = {
 const mock: PyApi = {
   async get_bootstrap() {
     return {
-      ok: true, settings: mockSettings, kaggle: mockKaggle,
-      resolve: { ok: true, info: mockInfo }, platform: "darwin",
-      config_path: "~/Library/Application Support/Krevon Scribe/settings.json",
+      // The dev build previews the Windows chrome on purpose: it is the one
+      // this app draws, and so the one that needs looking at in a browser.
+      ok: true, settings: mockSettings, kaggle: mockKaggle, platform: "darwin",
+      chrome: "custom", config_path: "~/Library/Application Support/Krevon Scribe/settings.json",
     }
   },
-  async get_resolve_state() { return { ok: true, info: mockInfo } },
   async save_settings(v) { Object.assign(mockSettings, v); return { ok: true, settings: mockSettings } },
   async save_kaggle_credentials() {
     Object.assign(mockKaggle, { has_token_file: true, username: "you", configured: true })
@@ -215,14 +192,12 @@ const mock: PyApi = {
   async reveal() { return { ok: true } },
   async open_external() { return { ok: true } },
   async is_running() { return { ok: true, running: false } },
+  async window_command() { return { ok: true, maximized: false } },
   async start_run() {
     void (async () => {
       emit({ event: "run_started", payload: {} })
       for (const m of [
-        "Timeline 'EP04 Rough Cut' at 24 fps.",
-        "Muted 1 of 3 audio tracks.",
-        "Rendering audio…",
-        "Rendered EP04_20260904_211500.wav.",
+        "Using take01.wav.",
         "Sending to Kaggle…",
         "Uploading audio to a private Kaggle dataset…",
         "Dataset ready.",
@@ -233,18 +208,16 @@ const mock: PyApi = {
         "Downloading results…",
         "Transcribed 13 segments.",
         "Routed 8 cues to English and 5 to Arabic.",
-        "Wrote EP04.srt (13 cues), plus the split files.",
-        "Placed 13 cues on subtitle track 1.",
+        "Wrote take01.srt (13 cues), plus the split files.",
       ]) { await wait(520); emit({ event: "log", payload: { message: m } }) }
       emit({
         event: "run_finished", payload: {
-          audio_path: "/Users/you/Documents/Krevon Scribe/audio/EP04.wav",
-          combined_srt: "/Users/you/Documents/Krevon Scribe/srt/EP04.srt",
-          en_srt: "/Users/you/Documents/Krevon Scribe/srt/EP04.en.srt",
-          ar_srt: "/Users/you/Documents/Krevon Scribe/srt/EP04.ar.srt",
+          audio_path: "/Users/you/Desktop/take01.wav",
+          combined_srt: "/Users/you/Documents/Krevon Scribe/take01.srt",
+          en_srt: "/Users/you/Documents/Krevon Scribe/take01.en.srt",
+          ar_srt: "/Users/you/Documents/Krevon Scribe/take01.ar.srt",
           en_cues: 8, ar_cues: 5, combined_cues: 13,
-          placed_language: "mixed", placed_cues: 13,
-          manual_srt: null, manual_track_index: null, detected_language: "en",
+          detected_language: "en",
           preview: [
             { start: 0.0, end: 3.1, text: "Okay, so now time for the chickens." },
             { start: 3.1, end: 6.25, text: "There's a secret to chicken bath?" },
@@ -256,9 +229,6 @@ const mock: PyApi = {
             { start: 26.67, end: 27.38, text: "ولا شيء" },
           ],
           preview_truncated: false,
-          font_hint: "One track carries both languages, so it carries one font. Select the "
-            + "subtitle track in Resolve and set the Inspector font to one that covers "
-            + "Arabic and Latin — Geeza Pro.",
           warnings: [],
         },
       })

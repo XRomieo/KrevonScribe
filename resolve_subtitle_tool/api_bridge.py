@@ -18,7 +18,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
-from . import config, pipeline, resolve_bridge
+from . import config, pipeline, window_chrome
 
 
 def _ok(**payload: Any) -> dict:
@@ -49,6 +49,7 @@ class Api:
         # twenty-second freeze on Windows. macOS never hit it: the Cocoa window
         # does not expose an equivalent graph.
         self._window = None
+        self._chrome: window_chrome.WindowChrome | None = None
         self._settings = config.load()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -72,17 +73,35 @@ class Api:
         return _ok(
             settings=self._settings.to_dict(),
             kaggle=config.kaggle_status(),
-            resolve=self.get_resolve_state(),
             platform=sys.platform,
+            chrome=window_chrome.KIND,
             config_path=str(config.CONFIG_PATH),
         )
 
-    def get_resolve_state(self) -> dict:
+    # -- the window's own title bar --------------------------------------
+    def window_command(self, action: str) -> dict:
+        """Drive the frameless window: the frontend draws its title bar.
+
+        One method rather than five, because every one of them answers the same
+        question afterwards -- is the window maximized? -- and the buttons have
+        to redraw from that.
+        """
         try:
-            return _ok(info=resolve_bridge.get_info().to_dict())
-        except resolve_bridge.ResolveError as exc:
-            return _err(exc)
-        except Exception as exc:  # noqa: BLE001 - surface anything to the UI
+            chrome = self._chrome
+            if chrome is None:
+                return _err("Window is not ready yet.")
+            if action == "minimize":
+                chrome.minimize()
+            elif action == "toggle_maximize":
+                chrome.toggle_maximize()
+            elif action == "close":
+                chrome.close()
+            elif action == "drag":
+                chrome.drag()  # returns when the mouse button comes up
+            elif action != "state":
+                return _err(f"Unknown window command: {action}")
+            return _ok(maximized=chrome.is_maximized())
+        except Exception as exc:  # noqa: BLE001
             return _err(exc)
 
     # -- settings --------------------------------------------------------
@@ -213,10 +232,7 @@ class Api:
         try:
             outcome = pipeline.run(
                 self._settings,
-                audio_source=options.get("audio_source", "timeline"),
-                track_indices=[int(i) for i in options.get("track_indices", [])],
                 audio_file=options.get("audio_file"),
-                import_to_resolve=bool(options.get("import_to_resolve", True)),
                 progress=self._log,
             )
             self._emit("run_finished", outcome.to_dict())

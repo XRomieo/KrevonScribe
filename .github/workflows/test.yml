@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.12"
       # Deliberately pytest and nothing else. The logic suite must stay
-      # runnable without Resolve, a GUI toolkit or any network dependency, and
+      # runnable without a GUI toolkit or any network dependency, and
       # installing nothing else is what keeps that true: a stray top-level
       # import of requests or kaggle fails here rather than in a user's build.
       - run: pip install pytest
@@ -43,7 +43,7 @@ jobs:
       - name: Build the frontend
         run: python scripts/build.py --frontend-only
       # Imports what the app imports and exercises the logic end to end,
-      # without needing Resolve, credentials or a network.
+      # without needing credentials or a network.
       - run: python app.py --selftest
 
   frontend:

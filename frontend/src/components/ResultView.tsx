@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertTriangle, ArrowUpRight, Check, Type } from "lucide-react"
+import { AlertTriangle, Check, FolderOpen, MousePointerClick } from "lucide-react"
 import type { PreviewCue, RunOutcome } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -11,6 +11,17 @@ function isArabic(text: string) {
   const letters = [...text].filter((c) => /\p{L}/u.test(c))
   if (!letters.length) return false
   return letters.filter((c) => ARABIC.test(c)).length / letters.length >= 0.5
+}
+
+/** Windows and macOS disagree about separators, so split on both. */
+function basename(path: string) {
+  return path.split(/[\\/]/).pop() || path
+}
+
+/** The folder holding the file, for saying where the subtitles went. */
+function dirname(path: string) {
+  const cut = path.search(/[\\/][^\\/]*$/)
+  return cut > 0 ? path.slice(0, cut) : path
 }
 
 function stamp(seconds: number) {
@@ -61,8 +72,8 @@ function useMoreBelow<T extends HTMLElement>() {
 export function ResultView({
   outcome, onReveal, onAgain,
 }: { outcome: RunOutcome; onReveal: (p: string) => void; onAgain: () => void }) {
-  const placed = outcome.placed_cues > 0
   const [listRef, moreBelow] = useMoreBelow<HTMLUListElement>()
+  const bothLanguages = outcome.en_cues > 0 && outcome.ar_cues > 0
   return (
     <div className="animate-rise">
       <div className="mb-6 flex items-start gap-3">
@@ -71,9 +82,7 @@ export function ResultView({
         </span>
         <div>
           <h2 className="font-display text-[22px] leading-tight text-ink">
-            {placed
-              ? `${outcome.placed_cues} cues on the timeline`
-              : `${outcome.combined_cues} cues written`}
+            {outcome.combined_cues} subtitles ready
           </h2>
           <p className="mt-1 text-[12.5px] text-ink-3">
             {outcome.en_cues} English · {outcome.ar_cues} Arabic
@@ -102,25 +111,29 @@ export function ResultView({
         </div>
       )}
 
-      {outcome.font_hint && (
-        <div className="mt-3.5 rounded-xl border border-pulse/25 bg-pulse/[0.05] px-4 py-3.5">
-          <p className="flex items-center gap-2 text-[12.5px] font-medium text-pulse">
-            <Type className="size-3.5" />
-            One step left, by hand
-          </p>
-          <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-2">{outcome.font_hint}</p>
-        </div>
-      )}
-
-      {outcome.manual_srt && (
-        <p className="mt-3.5 rounded-xl border border-edge bg-riser/40 px-4 py-3.5 text-[12.5px] leading-relaxed text-ink-2">
-          Drag <span className="font-mono text-ink">{outcome.manual_srt.split("/").pop()}</span>{" "}
-          from the Media Pool onto subtitle track{" "}
-          <span className="font-mono text-ink">{outcome.manual_track_index}</span>. Resolve sends
-          every scripted import to the track that already holds cues, so the second language has
-          to be placed by hand.
+      {/* The one thing left to do, and it is the same in every editor. */}
+      <div className="mt-3.5 rounded-xl border border-pulse/25 bg-pulse/[0.05] px-4 py-3.5">
+        <p className="flex items-center gap-2 text-[12.5px] font-medium text-pulse">
+          <MousePointerClick className="size-3.5" />
+          Drag it onto your timeline
         </p>
-      )}
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-2">
+          <span className="font-mono text-ink">{basename(outcome.combined_srt)}</span> holds
+          both languages in time order. It is plain SRT, so Resolve, Premiere, Final Cut and
+          CapCut all take it the same way — drop it on a subtitle track.
+          {bothLanguages && (
+            <> One track carries one font, so pick one that covers Arabic and Latin: Noto Sans
+            Arabic, Geeza Pro on macOS, Dubai on Windows.</>
+          )}
+        </p>
+        {bothLanguages && (
+          <p className="mt-2 text-[11.5px] leading-relaxed text-ink-3">
+            Want a font for each language? <span className="font-mono">{basename(outcome.en_srt)}</span>{" "}
+            and <span className="font-mono">{basename(outcome.ar_srt)}</span> are the same cues
+            split in two, for a track each.
+          </p>
+        )}
+      </div>
 
       {outcome.warnings.map((w, i) => (
         <p
@@ -132,23 +145,31 @@ export function ResultView({
         </p>
       ))}
 
-      <div className="mt-5 flex items-center gap-2.5">
-        <button
-          type="button"
-          onClick={onAgain}
-          className="rounded-lg bg-pulse px-4 py-2.5 text-[13px] font-semibold text-[#26060f] transition-[filter,transform] duration-150 hover:brightness-110 active:scale-[0.985]"
-        >
-          Start another run
-        </button>
+      <div className="mt-5 flex flex-wrap items-center gap-2.5">
         <button
           type="button"
           onClick={() => onReveal(outcome.combined_srt)}
-          className="group flex items-center gap-1.5 rounded-lg border border-edge px-3.5 py-2.5 text-[13px] text-ink-2 transition-colors hover:border-edge-lit hover:text-ink"
+          className="flex items-center gap-2 rounded-lg bg-pulse px-4 py-2.5 text-[13px] font-semibold text-[#26060f] transition-[filter,transform] duration-150 hover:brightness-110 active:scale-[0.985]"
         >
-          Show subtitle file
-          <ArrowUpRight className="size-3.5 text-ink-3 transition-colors group-hover:text-ink-2" />
+          <FolderOpen className="size-3.5" />
+          Open folder
+        </button>
+        <button
+          type="button"
+          onClick={onAgain}
+          className="rounded-lg border border-edge px-3.5 py-2.5 text-[13px] text-ink-2 transition-colors hover:border-edge-lit hover:text-ink"
+        >
+          Transcribe another
         </button>
       </div>
+
+      {/* Where it went, and what the button will do -- the folder opens with
+          the file already picked out, so it can be dragged straight from there. */}
+      <p className="mt-3 text-[11.5px] leading-relaxed text-ink-3">
+        Saved in{" "}
+        <span className="font-mono text-ink-2">{dirname(outcome.combined_srt)}</span>.
+        Opening the folder selects the file, ready to drag.
+      </p>
     </div>
   )
 }

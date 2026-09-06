@@ -200,7 +200,7 @@ def test_merge_orders_both_languages_by_time():
 
 
 def test_merge_produces_no_overlaps():
-    """A single Resolve subtitle track cannot hold overlapping cues."""
+    """A single subtitle track cannot hold overlapping cues."""
     en = [Cue(17.14, 18.10, "english")]
     ar = [Cue(16.74, 17.34, "arabic")]
     merged = merge_for_single_track(en, ar)

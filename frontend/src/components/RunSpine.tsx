@@ -22,7 +22,7 @@ function useNow(on: boolean) {
 }
 
 export function RunSpine({
-  stage, enteredAt, startedAt, running, error, logs, skip,
+  stage, enteredAt, startedAt, running, error, logs,
 }: {
   stage: StageId | null
   enteredAt: Partial<Record<StageId, number>>
@@ -30,8 +30,6 @@ export function RunSpine({
   running: boolean
   error: string | null
   logs: LogLine[]
-  /** Stages this run will never reach — file mode never touches Resolve. */
-  skip?: StageId[]
 }) {
   // null means "the user has not decided". A failure is the one time the log
   // is the thing you want, so it opens itself until they say otherwise.
@@ -40,7 +38,7 @@ export function RunSpine({
   // The clock stops ticking when the run does, so this stays put afterwards.
   const now = useNow(running)
   const active = indexOf(stage)
-  const stages = STAGES.filter((s) => !skip?.includes(s.id))
+  const stages = STAGES
   const elapsed = now - startedAt
 
   return (

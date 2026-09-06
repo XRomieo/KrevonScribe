@@ -62,10 +62,11 @@ EXE_CONFIG = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
-# Strings that exist only in the browser mock. A shipped build reaching the
-# mock once already put an invented timeline and three audio tracks in front of
-# a user while Resolve was not even open, so make it a build failure.
-MOCK_FINGERPRINTS = ("Interview B", "Ramadan Doc", "EP04 Rough Cut", "Music Bed")
+# Strings that exist only in the browser mock. A shipped build reaching the mock
+# once already put invented content in front of a user, so make it a build
+# failure. Keep these in step with frontend/src/lib/api.ts: a fingerprint that
+# no longer appears in the mock checks nothing at all.
+MOCK_FINGERPRINTS = ("/Users/you/", "take01.wav", "time for the chickens")
 
 
 def check_no_mock(dist: Path) -> None:

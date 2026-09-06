@@ -1,7 +1,7 @@
-"""File-mode pipeline runs, which need neither Resolve nor a network.
+"""The whole run, with the transcription backend stubbed out.
 
-Timeline mode is not covered here: it cannot run without a live Resolve, and
-the Resolve side is exercised by the probe scripts in ``scripts/``.
+Nothing here needs a network, a GPU or a video editor: an audio file goes in,
+subtitle files come out, and that is the entire product.
 """
 
 import sys
@@ -22,8 +22,8 @@ SEGMENTS = [
 
 
 @pytest.fixture
-def run_file_mode(tmp_path, monkeypatch):
-    """Call pipeline.run in file mode with a stubbed transcription backend."""
+def run_pipeline(tmp_path, monkeypatch):
+    """Call pipeline.run with a stubbed transcription backend."""
     audio = tmp_path / "take01.wav"
     audio.write_bytes(b"RIFF....WAVE")
 
@@ -37,59 +37,69 @@ def run_file_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_runner, "transcribe", fake_transcribe)
 
     def go(**overrides):
-        settings = Settings(srt_dir=str(tmp_path / "srt"), audio_dir=str(tmp_path))
+        settings = Settings(srt_dir=str(tmp_path / "srt"))
         for key, value in overrides.items():
             setattr(settings, key, value)
-        return pipeline.run(settings, audio_source="file", audio_file=str(audio))
+        return pipeline.run(settings, audio_file=str(audio))
 
     return go
 
 
-class TestFileMode:
-    def test_writes_the_combined_and_split_files(self, run_file_mode):
-        outcome = run_file_mode()
+class TestRun:
+    def test_writes_the_combined_and_split_files(self, run_pipeline):
+        outcome = run_pipeline()
         for path in (outcome.combined_srt, outcome.en_srt, outcome.ar_srt):
             assert Path(path).is_file()
         assert outcome.en_cues == 2
         assert outcome.ar_cues == 1
 
-    def test_preview_carries_the_cue_text_for_the_ui(self, run_file_mode):
-        outcome = run_file_mode()
+    def test_the_combined_file_holds_both_languages_in_time_order(self, run_pipeline):
+        # This is the file people drag onto a timeline, so it is the one that
+        # has to be right: every cue, once, in the order they were spoken.
+        outcome = run_pipeline()
+        text = Path(outcome.combined_srt).read_text(encoding="utf-8")
+        assert "Okay, so now time for the chickens." in text
+        assert "بدنا نحمل ال chickens" in text
+        assert text.index("chickens.") < text.index("بدنا") < text.index("secret")
+        assert outcome.combined_cues == 3
+
+    def test_preview_carries_the_cue_text_for_the_ui(self, run_pipeline):
+        outcome = run_pipeline()
         assert len(outcome.preview) == outcome.combined_cues
         assert outcome.preview[0]["text"].startswith("Okay")
         # Arabic must survive the trip as Arabic, not as a translation.
         assert any("بدنا" in cue["text"] for cue in outcome.preview)
         assert not outcome.preview_truncated
 
-    def test_preview_is_capped_so_a_long_timeline_stays_serialisable(
-        self, run_file_mode, monkeypatch
+    def test_preview_is_capped_so_a_long_recording_stays_serialisable(
+        self, run_pipeline, monkeypatch
     ):
         monkeypatch.setattr(pipeline, "PREVIEW_LIMIT", 2)
-        outcome = run_file_mode()
+        outcome = run_pipeline()
         assert len(outcome.preview) == 2
         assert outcome.preview_truncated
         assert outcome.combined_cues == 3   # the files still hold everything
 
-    def test_no_font_step_when_nothing_was_placed(self, run_file_mode):
-        # font_hint tells the user which typeface to set on the subtitle track
-        # Resolve just received. File mode places nothing, so there is no track
-        # to style and the advice would be noise.
-        outcome = run_file_mode(font_ar="Geeza Pro")
-        assert outcome.font_hint == ""
-        # And it never leaks into warnings, which are for things that went wrong.
-        assert not any("Geeza Pro" in w for w in outcome.warnings)
-
-    def test_file_mode_says_why_it_did_not_import(self, run_file_mode):
-        outcome = run_file_mode()
-        assert outcome.placed_cues == 0
-        assert any("does not import" in w for w in outcome.warnings)
+    def test_a_clean_run_reports_nothing_to_warn_about(self, run_pipeline):
+        assert run_pipeline().warnings == []
 
     def test_empty_transcription_raises_rather_than_writing_nothing(
-        self, run_file_mode, monkeypatch
+        self, run_pipeline, monkeypatch
     ):
         monkeypatch.setattr(
             kaggle_runner, "transcribe",
             lambda path, **kw: kaggle_runner.RunResult([], {}, "", "", Path("."), 0.0),
         )
         with pytest.raises(RuntimeError, match="no usable cues"):
-            run_file_mode()
+            run_pipeline()
+
+
+class TestChoosingTheAudio:
+    def test_no_file_is_a_clear_error_rather_than_a_crash(self, tmp_path):
+        with pytest.raises(ValueError, match="Choose an audio file"):
+            pipeline.run(Settings(srt_dir=str(tmp_path)), audio_file=None)
+
+    def test_a_path_that_is_not_there_names_itself(self, tmp_path):
+        missing = tmp_path / "gone.wav"
+        with pytest.raises(FileNotFoundError, match="gone.wav"):
+            pipeline.run(Settings(srt_dir=str(tmp_path)), audio_file=str(missing))

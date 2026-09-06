@@ -1,4 +1,4 @@
-"""The JS-facing bridge. Only the parts that need no window or Resolve."""
+"""The JS-facing bridge. Only the parts that need no window."""
 
 import sys
 from pathlib import Path
@@ -79,9 +79,9 @@ class TestReveal:
 
 class TestSaveSettings:
     def test_unknown_keys_are_dropped_rather_than_raising(self, api):
-        result = api.save_settings({"font_en": "Futura", "not_a_field": 1})
+        result = api.save_settings({"whisper_model": "medium", "not_a_field": 1})
         assert result["ok"]
-        assert result["settings"]["font_en"] == "Futura"
+        assert result["settings"]["whisper_model"] == "medium"
         assert "not_a_field" not in result["settings"]
 
     def test_a_threshold_arriving_as_a_string_is_still_a_number(self, api):
@@ -157,4 +157,7 @@ class TestPywebviewCanBuildItsBridge:
         api._window = Endless()
         found = self.walk(api)          # raises RecursionError if it descends
         assert "get_bootstrap" in found
-        assert not [k for k in found if k.startswith("window")], found
+        # Anything reached *through* the window is named "window.something".
+        # window_command is a method on Api itself and belongs in the bridge.
+        walked = [k for k in found if k == "window" or k.startswith("window.")]
+        assert not walked, found

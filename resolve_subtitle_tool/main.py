@@ -20,8 +20,12 @@ def frontend_index() -> Path:
     if bundle:
         candidates.append(Path(bundle) / "frontend_dist" / "index.html")
     here = Path(__file__).resolve().parent
-    candidates.append(here / "frontend_dist" / "index.html")
+    # From source, frontend/dist comes first. The copy beside this file is what
+    # scripts/build.py stages for PyInstaller, and it is only as new as the last
+    # release build -- preferring it means `bun run build` then `python app.py`
+    # silently shows the old UI, which costs an hour before anyone suspects it.
     candidates.append(here.parent / "frontend" / "dist" / "index.html")
+    candidates.append(here / "frontend_dist" / "index.html")
     for c in candidates:
         if c.is_file():
             return c
@@ -50,14 +54,32 @@ def _gui_backend_modules() -> tuple[str, ...]:
     return ()
 
 
+def _print_safely(message: str, stream=None) -> None:
+    """Print text a Windows console may not be able to encode.
+
+    A console there is often cp1252 rather than UTF-8, and a line of this
+    output can carry a non-ASCII path -- a profile name is enough -- or a
+    localised OS error. Letting print() raise UnicodeEncodeError would lose
+    the whole message at the moment it is most wanted, so mangle the few
+    characters it cannot represent instead.
+    """
+    stream = sys.stdout if stream is None else stream
+    try:
+        print(message, file=stream)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "ascii"
+        print(message.encode(encoding, "backslashreplace").decode(encoding),
+              file=stream)
+
+
 def selftest() -> int:
     """Verify a build can actually do its job, and report what it found.
 
     A PyInstaller bundle fails in a particular way: everything looks present on
     disk, and then an import that only happens at runtime is missing on the
     user's machine. Checking files exist does not catch that, so this imports
-    what the app imports and exercises the parts that need no Resolve, no
-    network and no credentials. CI runs it against the frozen executable.
+    what the app imports and exercises the parts that need no network and no
+    credentials. CI runs it against the frozen executable.
     """
     import importlib
     import time
@@ -161,7 +183,7 @@ def selftest() -> int:
     out = _flag_value("--selftest-out")
     if out:
         Path(out).write_text(report + "\n", encoding="utf-8")
-    print(report)
+    _print_safely(report)
     return 1 if failed else 0
 
 
@@ -284,7 +306,7 @@ def watch_bridge(window) -> None:
 
 def _fatal(message: str) -> None:
     """Report a startup failure. A windowed build has no console to print to."""
-    print(message, file=sys.stderr)
+    _print_safely(message, sys.stderr)
     if sys.platform == "win32":
         try:
             import ctypes
@@ -321,7 +343,14 @@ def main() -> None:
             "If the PC is older, .NET Framework 4.6.2 or newer is needed too."
         )
 
+    from . import window_chrome
+
     api = Api()
+    # Windows gets a frameless window and draws its own title bar, so the bar
+    # matches the app rather than the system theme. easy_drag would make every
+    # pixel of the page drag the window, including the buttons; window_chrome
+    # handles dragging from the header alone.
+    frameless = window_chrome.KIND == "custom"
     window = webview.create_window(
         WINDOW_TITLE,
         str(frontend_index()),
@@ -330,8 +359,16 @@ def main() -> None:
         height=820,
         min_size=(720, 640),
         background_color="#0f0e13",
+        frameless=frameless,
+        easy_drag=False,
     )
     api._window = window  # underscored on purpose; see Api.__init__
+    chrome = window_chrome.WindowChrome(window)
+    api._chrome = chrome
+    if frameless:
+        # The handle only exists once the window is on screen, and the resize
+        # border has to be put back on it there.
+        window.events.shown += chrome.attach
     watch_bridge(window)
     # debug=True opens the inspector; keep it off for released builds.
     try:

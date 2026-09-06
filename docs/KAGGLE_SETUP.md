@@ -1,6 +1,6 @@
 # Kaggle setup (one time, ~5 minutes)
 
-The tool does no transcription locally. It uploads your timeline audio to Kaggle
+The tool does no transcription locally. It uploads your audio file to Kaggle
 as a private dataset, runs a GPU notebook there with faster-whisper, and pulls
 back `segments.json`. That needs a Kaggle account with two things switched on.
 
@@ -16,7 +16,7 @@ SMS code.
 This is the step people miss. An unverified Kaggle account **cannot use a GPU and
 cannot enable internet access inside a notebook**. Our kernel needs both:
 
-- **GPU** — CPU transcription of a 30-minute timeline takes over an hour.
+- **GPU** — CPU transcription of a 30-minute recording takes over an hour.
 - **Internet** — the kernel runs `pip install faster-whisper` and downloads the
   Whisper model weights at runtime.
 
@@ -90,7 +90,7 @@ sure: Kaggle exposes no API field for phone-verification status.
 | Dataset size | 200 GB total, plenty for audio |
 | Concurrent GPU sessions | 1 |
 
-A 30-minute timeline on `small` takes roughly 2–3 GPU-minutes, so the weekly
+A 30-minute recording on `small` takes roughly 2–3 GPU-minutes, so the weekly
 quota is not a practical constraint.
 
 ## Where things land in your Kaggle account

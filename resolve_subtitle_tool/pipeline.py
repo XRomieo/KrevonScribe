@@ -1,4 +1,11 @@
-"""End-to-end run: audio -> Kaggle transcription -> SRTs -> back into Resolve."""
+"""End-to-end run: an audio file -> transcription -> subtitle files on disk.
+
+The output is plain SRT, which every editor reads. Krevon Scribe deliberately
+does not drive an editor itself: doing that meant one vendor's scripting API,
+one more thing to install, and a different failure on every machine. Dragging
+the finished .srt onto a timeline is one gesture and works in Resolve, Premiere,
+Final Cut, CapCut and anything else.
+"""
 
 from __future__ import annotations
 
@@ -6,40 +13,35 @@ import datetime as _dt
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
 
-from . import kaggle_runner, resolve_bridge, speechmatics_runner, subtitle_utils
+from . import kaggle_runner, speechmatics_runner, subtitle_utils
 from .config import Settings
 
 Progress = Callable[[str], None]
 
 # How many cues travel back to the UI for the preview. Enough to scroll through
-# and judge the result; a feature-length timeline is not worth serialising whole.
+# and judge the result; a feature-length recording is not worth serialising whole.
 PREVIEW_LIMIT = 400
 
 
 @dataclass
 class RunOutcome:
     audio_path: str
+    # Both languages in time order, which is what one subtitle track wants.
     combined_srt: str
+    # The same cues split by language, for anyone who wants a track each so the
+    # two scripts can carry different fonts.
     en_srt: str
     ar_srt: str
     en_cues: int
     ar_cues: int
     combined_cues: int
-    placed_language: str | None
-    placed_cues: int
-    manual_srt: str | None
-    manual_track_index: int | None
     detected_language: str
     # The first cues themselves, so the UI can show what was actually written
     # rather than only how many. Each is {"start", "end", "text"}.
     preview: list[dict] = field(default_factory=list)
     preview_truncated: bool = False
-    # The one step the tool cannot do itself: Resolve exposes no font API, so
-    # the typeface has to be set by hand in the Inspector. Kept separate from
-    # ``warnings`` because it is an instruction, not something that went wrong.
-    font_hint: str = ""
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -47,46 +49,28 @@ class RunOutcome:
 
 
 def _stamp(name: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "timeline"
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "audio"
     return f"{safe}_{_dt.datetime.now():%Y%m%d_%H%M%S}"
 
 
 def run(
     settings: Settings,
     *,
-    audio_source: str = "timeline",
-    track_indices: Sequence[int] = (),
     audio_file: str | None = None,
-    import_to_resolve: bool = True,
     progress: Progress | None = None,
 ) -> RunOutcome:
-    """Execute one full transcription run.
-
-    ``audio_source`` is ``"timeline"`` (render the selected audio tracks out of
-    Resolve) or ``"file"`` (use ``audio_file`` from disk).
-    """
+    """Transcribe ``audio_file`` and write the subtitle files."""
     say = progress or (lambda _m: None)
     warnings: list[str] = []
 
     # ---- 1. audio ---------------------------------------------------------
-    if audio_source == "timeline":
-        info = resolve_bridge.get_info()
-        if not info.has_content:
-            raise resolve_bridge.ResolveError("The open timeline is empty.")
-        say(f"Timeline '{info.timeline}' at {info.fps:g} fps.")
-        base = _stamp(f"{info.project}_{info.timeline}")
-        audio = resolve_bridge.export_timeline_audio(
-            track_indices or [t.index for t in info.audio_tracks],
-            settings.audio_dir, base, progress=say,
-        )
-    else:
-        if not audio_file:
-            raise ValueError("Choose an audio file, or switch to timeline mode.")
-        audio = Path(audio_file)
-        if not audio.is_file():
-            raise FileNotFoundError(f"Audio file not found: {audio}")
-        base = _stamp(audio.stem)
-        say(f"Using {audio.name}.")
+    if not audio_file:
+        raise ValueError("Choose an audio file to transcribe.")
+    audio = Path(audio_file)
+    if not audio.is_file():
+        raise FileNotFoundError(f"Audio file not found: {audio}")
+    base = _stamp(audio.stem)
+    say(f"Using {audio.name}.")
 
     # ---- 2. transcribe ----------------------------------------------------
     if settings.backend == "speechmatics":
@@ -134,94 +118,13 @@ def run(
     combined_srt = subtitle_utils.write_srt(combined, srt_dir / f"{base}.srt")
     say(f"Wrote {combined_srt.name} ({len(combined)} cues), plus the split files.")
 
-    outcome = RunOutcome(
+    return RunOutcome(
         audio_path=str(audio), combined_srt=str(combined_srt),
         en_srt=str(en_srt), ar_srt=str(ar_srt),
         en_cues=len(english), ar_cues=len(arabic), combined_cues=len(combined),
-        placed_language=None, placed_cues=0,
-        manual_srt=None, manual_track_index=None,
         detected_language=detected,
         preview=[{"start": c.start, "end": c.end, "text": c.text}
                  for c in combined[:PREVIEW_LIMIT]],
         preview_truncated=len(combined) > PREVIEW_LIMIT,
         warnings=warnings,
     )
-
-    # ---- 4. back into Resolve --------------------------------------------
-    if not import_to_resolve:
-        return outcome
-    if audio_source != "timeline":
-        warnings.append(
-            "Manual-file mode does not import into Resolve, because the cue times "
-            "are relative to that file rather than to a timeline."
-        )
-        return outcome
-
-    if settings.replace_existing_subtitles:
-        try:
-            resolve_bridge.clear_subtitle_tracks(progress=say)
-        except resolve_bridge.ResolveError as exc:
-            warnings.append(f"Could not clear the existing subtitle tracks: {exc}")
-            say(f"! {exc}")
-
-    if settings.single_track:
-        # Resolve only ever displays one subtitle track, so both languages share
-        # it. This is also the only arrangement it can populate automatically:
-        # every append lands on the already-filled track, so a second track
-        # would always need dragging by hand.
-        if combined:
-            try:
-                placed = resolve_bridge.place_srt_on_timeline(
-                    combined_srt, "Subtitles", progress=say
-                )
-                outcome.placed_language, outcome.placed_cues = "mixed", placed
-            except resolve_bridge.ResolveError as exc:
-                warnings.append(f"Could not place the subtitles: {exc}")
-                say(f"! {exc}")
-        outcome.font_hint = (
-            f"One track carries both languages, so it carries one font. Select the "
-            f"subtitle track in Resolve and set the Inspector font to one that covers "
-            f"Arabic and Latin — {settings.font_ar}."
-        )
-        return outcome
-
-    primary = settings.primary_language if settings.primary_language in ("en", "ar") else "en"
-    pairs = {"en": (en_srt, english, settings.font_en, "Subs EN"),
-             "ar": (ar_srt, arabic, settings.font_ar, "Subs AR")}
-    secondary = "ar" if primary == "en" else "en"
-
-    # Only the language that actually has cues is worth placing.
-    if not pairs[primary][1] and pairs[secondary][1]:
-        say(f"No {primary.upper()} cues; placing {secondary.upper()} instead.")
-        primary, secondary = secondary, primary
-
-    p_srt, p_cues, p_font, p_name = pairs[primary]
-    if p_cues:
-        try:
-            placed = resolve_bridge.place_srt_on_timeline(p_srt, p_name, progress=say)
-            outcome.placed_language, outcome.placed_cues = primary, placed
-        except resolve_bridge.ResolveError as exc:
-            warnings.append(f"Could not place the {primary.upper()} subtitles: {exc}")
-            say(f"! {exc}")
-
-    s_srt, s_cues, s_font, s_name = pairs[secondary]
-    if s_cues:
-        # Resolve routes every append to the already-populated track, so the
-        # second language cannot be placed automatically. Import it to the Media
-        # Pool and give the user an empty track to drop it on.
-        try:
-            resolve_bridge.import_srt_to_pool(s_srt)
-            index = resolve_bridge.add_empty_subtitle_track(s_name)
-            outcome.manual_srt, outcome.manual_track_index = str(s_srt), index
-            say(
-                f"{s_srt.name} is in the Media Pool. Drag it onto subtitle track "
-                f"{index} ('{s_name}') to finish."
-            )
-        except resolve_bridge.ResolveError as exc:
-            warnings.append(f"Could not stage the {secondary.upper()} subtitles: {exc}")
-
-    outcome.font_hint = (
-        f"Set the fonts by hand in the Inspector — {settings.font_en} for English, "
-        f"{settings.font_ar} for Arabic. Resolve exposes no font API."
-    )
-    return outcome

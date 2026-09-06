@@ -50,14 +50,7 @@ LEGACY_CONFIG_PATH = legacy_config_dir() / "settings.json"
 class Settings:
     """User-editable settings. Every field must be JSON-serialisable."""
 
-    audio_dir: str = ""
     srt_dir: str = ""
-
-    # Fonts cannot be applied through the Resolve API (see
-    # docs/RESOLVE_API_FINDINGS.md). They are stored so the UI can remind the
-    # user which typeface to set by hand on each subtitle track.
-    font_en: str = "Helvetica Neue"
-    font_ar: str = "Geeza Pro" if sys.platform == "darwin" else "Dubai"
 
     kaggle_username: str = ""
     whisper_model: str = "large-v2"
@@ -77,32 +70,22 @@ class Settings:
     # Arabic/English audio an explicit hint usually helps.
     whisper_language: str = "auto"
 
-    # Share of letters in a cue that must be Arabic for it to route to the
-    # Arabic track. 0.5 = majority script wins; 0.0 = any Arabic at all.
+    # Share of letters in a cue that must be Arabic for it to be written as an
+    # Arabic cue. 0.5 = majority script wins; 0.0 = any Arabic at all.
     arabic_threshold: float = 0.5
 
-    # Which language gets auto-placed on the timeline. Only one can be, because
-    # every append lands on the subtitle track that already holds cues.
-    primary_language: str = "en"
-    single_track: bool = True
     # Re-time cue text against the audio with CTC forced alignment after
     # transcribing. Whisper infers its timestamps and they drift; the aligner
     # measures them. Costs about a minute of GPU time.
     forced_alignment: bool = True
-    # Delete existing subtitle tracks before importing. Off by default because
-    # it throws away work; without it a second run refuses to place anything,
-    # since Resolve sends every import to the track that already holds cues.
-    replace_existing_subtitles: bool = False
     # "speechmatics" (Melia 1: one pass, native code-switching, per-word language
     # tags) or "kaggle" (free whisper on a Kaggle GPU).
     backend: str = "kaggle"
     speechmatics_api_key: str = ""
 
     def __post_init__(self) -> None:
-        if not self.audio_dir:
-            self.audio_dir = str(default_output_dir() / "audio")
         if not self.srt_dir:
-            self.srt_dir = str(default_output_dir() / "srt")
+            self.srt_dir = str(default_output_dir())
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
